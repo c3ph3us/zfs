@@ -371,7 +371,26 @@ zio_checksum_compute(zio_t *zio, enum zio_checksum checksum,
 		    sizeof (zio_cksum_t));
 	} else {
 		ci->ci_func[0](abd, size, spa->spa_cksum_tmpls[checksum],
-		    &bp->blk_cksum);
+		    &cksum);
+
+		if (BP_IS_ENCRYPTED(bp)) {
+			/*
+			 * Weak checksums do not have their entropy spread
+			 * evenly across the bits of the checksum. Therefore,
+			 * when truncating a weak checksum we XOR the first
+			 * 2 words with the last 2 so that we don't "lose" any
+			 * entropy unnecessarily.
+			 */
+			if (!(ci->ci_flags & ZCHECKSUM_FLAG_DEDUP)) {
+				cksum.zc_word[0] ^= cksum.zc_word[2];
+				cksum.zc_word[1] ^= cksum.zc_word[3];
+			}
+
+			bp->blk_cksum.zc_word[0] = cksum.zc_word[0];
+			bp->blk_cksum.zc_word[1] = cksum.zc_word[1];
+		} else {
+			bp->blk_cksum = cksum;
+		}
 	}
 }
 
@@ -384,6 +403,7 @@ zio_checksum_error_impl(spa_t *spa, const blkptr_t *bp,
 	zio_cksum_t actual_cksum, expected_cksum;
 	zio_eck_t eck;
 	int byteswap;
+	boolean_t mac = (bp) ? BP_IS_ENCRYPTED(bp) : B_FALSE;
 
 	if (checksum >= ZIO_CHECKSUM_FUNCTIONS || ci->ci_func[0] == NULL)
 		return (SET_ERROR(EINVAL));
@@ -417,6 +437,7 @@ zio_checksum_error_impl(spa_t *spa, const blkptr_t *bp,
 			}
 
 			size = P2ROUNDUP_TYPED(nused, ZIL_MIN_BLKSZ, uint64_t);
+			mac = B_FALSE;
 		} else {
 			eck_offset = size - sizeof (zio_eck_t);
 			abd_copy_to_buf_off(&eck, abd, eck_offset,
@@ -467,8 +488,23 @@ zio_checksum_error_impl(spa_t *spa, const blkptr_t *bp,
 		info->zbc_has_cksum = 1;
 	}
 
-	if (!ZIO_CHECKSUM_EQUAL(actual_cksum, expected_cksum))
-		return (SET_ERROR(ECKSUM));
+	/*
+	 * MAC checksums are a special case since half of this checksum will
+	 * actually be the encryption MAC. This will be verified by the
+	 * decryption process, so we just check the real checksum now.
+	 */
+	if (mac) {
+		if (!(ci->ci_flags & ZCHECKSUM_FLAG_DEDUP)) {
+			actual_cksum.zc_word[0] ^= actual_cksum.zc_word[2];
+			actual_cksum.zc_word[1] ^= actual_cksum.zc_word[3];
+		}
+
+		if (!ZIO_CHECKSUM_MAC_EQUAL(actual_cksum, expected_cksum))
+			return (SET_ERROR(ECKSUM));
+	} else {
+		if (!ZIO_CHECKSUM_EQUAL(actual_cksum, expected_cksum))
+			return (SET_ERROR(ECKSUM));
+	}
 
 	return (0);
 }
