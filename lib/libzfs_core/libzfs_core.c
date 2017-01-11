@@ -174,7 +174,8 @@ lzc_ioctl(zfs_ioc_t ioc, const char *name,
 	}
 
 out:
-	fnvlist_pack_free(packed, size);
+	if (packed != NULL)
+		fnvlist_pack_free(packed, size);
 	free((void *)(uintptr_t)zc.zc_nvlist_dst);
 	return (error);
 }
@@ -994,17 +995,42 @@ lzc_destroy_bookmarks(nvlist_t *bmarks, nvlist_t **errlist)
  * the hidden_args nvlist so that it is not logged
  */
 int
-lzc_key(const char *fsname, uint64_t crypto_cmd, nvlist_t *args,
-    nvlist_t *hidden_args)
+lzc_load_key(const char *fsname, boolean_t noop, nvlist_t *hidden_args)
 {
 	int error;
-	nvlist_t *ioc_args = fnvlist_alloc();
-	fnvlist_add_uint64(ioc_args, "crypto_cmd", crypto_cmd);
-	if (args != NULL)
-		fnvlist_add_nvlist(ioc_args, "args", args);
+	nvlist_t *ioc_args = NULL;
+
+	if (hidden_args == NULL)
+		return (EINVAL);
+
+	ioc_args = fnvlist_alloc();
+	fnvlist_add_nvlist(ioc_args, ZPOOL_HIDDEN_ARGS, hidden_args);
+	if (noop)
+		fnvlist_add_boolean(ioc_args, "noop");
+	error = lzc_ioctl(ZFS_IOC_LOAD_KEY, fsname, ioc_args, NULL);
+	nvlist_free(ioc_args);
+
+	return (error);
+}
+
+int
+lzc_unload_key(const char *fsname)
+{
+	return (lzc_ioctl(ZFS_IOC_UNLOAD_KEY, fsname, NULL, NULL));
+}
+
+int
+lzc_change_key(const char *fsname, nvlist_t *args, nvlist_t *hidden_args)
+{
+	int error;
+	nvlist_t *ioc_args = NULL;
+
+	ioc_args = fnvlist_alloc();
 	if (hidden_args != NULL)
 		fnvlist_add_nvlist(ioc_args, ZPOOL_HIDDEN_ARGS, hidden_args);
-	error = lzc_ioctl(ZFS_IOC_KEY, fsname, ioc_args, NULL);
+	if (args != NULL)
+		fnvlist_add_nvlist(ioc_args, "props", args);
+	error = lzc_ioctl(ZFS_IOC_CHANGE_KEY, fsname, ioc_args, NULL);
 	nvlist_free(ioc_args);
 	return (error);
 }
