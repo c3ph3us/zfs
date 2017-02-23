@@ -272,9 +272,9 @@ get_usage(zfs_help_t idx)
 	case HELP_ROLLBACK:
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
-		return (gettext("\tsend [-DnPpRvLec] [-[i|I] snapshot] "
+		return (gettext("\tsend [-DnPpRvLecr] [-[i|I] snapshot] "
 		    "<snapshot>\n"
-		    "\tsend [-Lec] [-i snapshot|bookmark] "
+		    "\tsend [-Lecr] [-i snapshot|bookmark] "
 		    "<filesystem|volume|snapshot>\n"
 		    "\tsend [-nvPe] -t <receive_resume_token>\n"));
 	case HELP_SET:
@@ -3803,11 +3803,12 @@ zfs_do_send(int argc, char **argv)
 		{"embed",	no_argument,		NULL, 'e'},
 		{"resume",	required_argument,	NULL, 't'},
 		{"compressed",	no_argument,		NULL, 'c'},
+		{"raw",		no_argument,		NULL, 'r'},
 		{0, 0, 0, 0}
 	};
 
 	/* check options */
-	while ((c = getopt_long(argc, argv, ":i:I:RDpvnPLet:c", long_options,
+	while ((c = getopt_long(argc, argv, ":i:I:RDpvnPLet:cr", long_options,
 	    NULL)) != -1) {
 		switch (c) {
 		case 'i':
@@ -3854,6 +3855,9 @@ zfs_do_send(int argc, char **argv)
 			break;
 		case 'c':
 			flags.compress = B_TRUE;
+			break;
+		case 'r':
+			flags.raw = B_TRUE;
 			break;
 		case ':':
 			/*
@@ -3923,6 +3927,12 @@ zfs_do_send(int argc, char **argv)
 		}
 	}
 
+	if (flags.raw && flags.compress) {
+		(void) fprintf(stderr,
+		    gettext("raw and compress flags are mutually exclusive\n"));
+		return (1);
+	}
+
 	if (!flags.dryrun && isatty(STDOUT_FILENO)) {
 		(void) fprintf(stderr,
 		    gettext("Error: Stream can not be written to a terminal.\n"
@@ -3962,6 +3972,8 @@ zfs_do_send(int argc, char **argv)
 			lzc_flags |= LZC_SEND_FLAG_EMBED_DATA;
 		if (flags.compress)
 			lzc_flags |= LZC_SEND_FLAG_COMPRESS;
+		if (flags.raw)
+			lzc_flags |= LZC_SEND_FLAG_RAW;
 
 		if (fromname != NULL &&
 		    (fromname[0] == '#' || fromname[0] == '@')) {
