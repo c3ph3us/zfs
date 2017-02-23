@@ -533,6 +533,8 @@ lzc_send_resume(const char *snapname, const char *from, int fd,
 		fnvlist_add_boolean(args, "embedok");
 	if (flags & LZC_SEND_FLAG_COMPRESS)
 		fnvlist_add_boolean(args, "compressok");
+	if (flags & LZC_SEND_FLAG_RAW)
+		fnvlist_add_boolean(args, "rawok");
 	if (resumeobj != 0 || resumeoff != 0) {
 		fnvlist_add_uint64(args, "resume_object", resumeobj);
 		fnvlist_add_uint64(args, "resume_offset", resumeoff);
@@ -602,17 +604,17 @@ recv_read(int fd, void *buf, int ilen)
 }
 
 /*
- * Linux adds ZFS_IOC_RECV_NEW for resumable streams and preserves the legacy
- * ZFS_IOC_RECV user/kernel interface.  The new interface supports all stream
- * options but is currently only used for resumable streams.  This way updated
- * user space utilities will interoperate with older kernel modules.
+ * Linux adds ZFS_IOC_RECV_NEW for resumable and raw streams and preserves the
+ * legacy ZFS_IOC_RECV user/kernel interface.  The new interface supports all
+ * stream options but is currently only used for resumable streams.  This way
+ * updated user space utilities will interoperate with older kernel modules.
  *
  * Non-Linux OpenZFS platforms have opted to modify the legacy interface.
  */
 static int
 recv_impl(const char *snapname, nvlist_t *recvdprops, nvlist_t *localprops,
-    const char *origin, boolean_t force, boolean_t resumable, int input_fd,
-    const dmu_replay_record_t *begin_record, int cleanup_fd,
+    const char *origin, boolean_t force, boolean_t resumable, boolean_t raw,
+    int input_fd, const dmu_replay_record_t *begin_record, int cleanup_fd,
     uint64_t *read_bytes, uint64_t *errflags, uint64_t *action_handle,
     nvlist_t **errors)
 {
@@ -652,7 +654,7 @@ recv_impl(const char *snapname, nvlist_t *recvdprops, nvlist_t *localprops,
 		drr = *begin_record;
 	}
 
-	if (resumable) {
+	if (resumable || raw) {
 		nvlist_t *outnvl = NULL;
 		nvlist_t *innvl = fnvlist_alloc();
 
@@ -793,10 +795,10 @@ recv_impl(const char *snapname, nvlist_t *recvdprops, nvlist_t *localprops,
  */
 int
 lzc_receive(const char *snapname, nvlist_t *props, const char *origin,
-    boolean_t force, int fd)
+    boolean_t force, boolean_t raw, int fd)
 {
-	return (recv_impl(snapname, props, NULL, origin, force, B_FALSE, fd,
-	    NULL, -1, NULL, NULL, NULL, NULL));
+	return (recv_impl(snapname, props, NULL, origin, force, B_FALSE, raw,
+	    fd, NULL, -1, NULL, NULL, NULL, NULL));
 }
 
 /*
@@ -807,10 +809,10 @@ lzc_receive(const char *snapname, nvlist_t *props, const char *origin,
  */
 int
 lzc_receive_resumable(const char *snapname, nvlist_t *props, const char *origin,
-    boolean_t force, int fd)
+    boolean_t force, boolean_t raw, int fd)
 {
-	return (recv_impl(snapname, props, NULL, origin, force, B_TRUE, fd,
-	    NULL, -1, NULL, NULL, NULL, NULL));
+	return (recv_impl(snapname, props, NULL, origin, force, B_TRUE, raw,
+	    fd, NULL, -1, NULL, NULL, NULL, NULL));
 }
 
 /*
@@ -826,13 +828,14 @@ lzc_receive_resumable(const char *snapname, nvlist_t *props, const char *origin,
  */
 int
 lzc_receive_with_header(const char *snapname, nvlist_t *props,
-    const char *origin, boolean_t force, boolean_t resumable, int fd,
-    const dmu_replay_record_t *begin_record)
+    const char *origin, boolean_t force, boolean_t resumable, boolean_t raw,
+    int fd, const dmu_replay_record_t *begin_record)
 {
 	if (begin_record == NULL)
 		return (EINVAL);
-	return (recv_impl(snapname, props, NULL, origin, force, resumable, fd,
-	    begin_record, -1, NULL, NULL, NULL, NULL));
+
+	return (recv_impl(snapname, props, NULL, origin, force, resumable, raw,
+	    fd, begin_record, -1, NULL, NULL, NULL, NULL));
 }
 
 /*
@@ -856,13 +859,13 @@ lzc_receive_with_header(const char *snapname, nvlist_t *props,
  * property.  Callers are responsible for freeing this nvlist.
  */
 int lzc_receive_one(const char *snapname, nvlist_t *props,
-    const char *origin, boolean_t force, boolean_t resumable, int input_fd,
-    const dmu_replay_record_t *begin_record, int cleanup_fd,
+    const char *origin, boolean_t force, boolean_t resumable, boolean_t raw,
+    int input_fd, const dmu_replay_record_t *begin_record, int cleanup_fd,
     uint64_t *read_bytes, uint64_t *errflags, uint64_t *action_handle,
     nvlist_t **errors)
 {
 	return (recv_impl(snapname, props, NULL, origin, force, resumable,
-	    input_fd, begin_record, cleanup_fd, read_bytes, errflags,
+	    raw, input_fd, begin_record, cleanup_fd, read_bytes, errflags,
 	    action_handle, errors));
 }
 
@@ -876,12 +879,13 @@ int lzc_receive_one(const char *snapname, nvlist_t *props,
  */
 int lzc_receive_with_cmdprops(const char *snapname, nvlist_t *props,
     nvlist_t *cmdprops, const char *origin, boolean_t force,
-    boolean_t resumable, int input_fd, const dmu_replay_record_t *begin_record,
-    int cleanup_fd, uint64_t *read_bytes, uint64_t *errflags,
-    uint64_t *action_handle, nvlist_t **errors)
+    boolean_t resumable, boolean_t raw, int input_fd,
+    const dmu_replay_record_t *begin_record, int cleanup_fd,
+    uint64_t *read_bytes, uint64_t *errflags, uint64_t *action_handle,
+    nvlist_t **errors)
 {
 	return (recv_impl(snapname, props, cmdprops, origin, force, resumable,
-	    input_fd, begin_record, cleanup_fd, read_bytes, errflags,
+	    raw, input_fd, begin_record, cleanup_fd, read_bytes, errflags,
 	    action_handle, errors));
 }
 
