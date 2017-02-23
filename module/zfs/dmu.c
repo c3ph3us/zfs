@@ -2000,9 +2000,9 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 	zp->zp_dedup_verify = dedup && dedup_verify;
 	zp->zp_nopwrite = nopwrite;
 	zp->zp_encrypt = encrypt;
-	bzero(zp->zp_salt, DATA_SALT_LEN);
-	bzero(zp->zp_iv, DATA_IV_LEN);
-	bzero(zp->zp_mac, DATA_MAC_LEN);
+	bzero(zp->zp_salt, ZIO_DATA_SALT_LEN);
+	bzero(zp->zp_iv, ZIO_DATA_IV_LEN);
+	bzero(zp->zp_mac, ZIO_DATA_MAC_LEN);
 
 	ASSERT(!(zp->zp_encrypt && zp->zp_copies >= 3));
 	ASSERT3U(zp->zp_compress, !=, ZIO_COMPRESS_INHERIT);
