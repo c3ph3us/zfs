@@ -40,29 +40,29 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS2 && \
-		log_must $ZFS destroy -r $TESTPOOL/$TESTFS2
+		log_must zfs destroy -r $TESTPOOL/$TESTFS2
 	datasetexists $TESTPOOL/$TESTFS3 && \
-		log_must $ZFS destroy -r $TESTPOOL/$TESTFS3
+		log_must zfs destroy -r $TESTPOOL/$TESTFS3
 }
 log_onexit cleanup
 
 log_assert "'zfs rename' should not move an encrypted child outside of its" \
 	"encryption root"
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS2"
-log_must $ZFS create $TESTPOOL/$TESTFS2/child
-log_must $ZFS create $TESTPOOL/$TESTFS2/child/grandchild
-log_must eval "$ECHO $PASSPHRASE1 | $ZFS create -o encryption=on" \
+log_must zfs create $TESTPOOL/$TESTFS2/child
+log_must zfs create $TESTPOOL/$TESTFS2/child/grandchild
+log_must eval "echo $PASSPHRASE1 | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS3"
 
-log_mustnot $ZFS rename $TESTPOOL/$TESTFS2/child/grandchild \
+log_mustnot zfs rename $TESTPOOL/$TESTFS2/child/grandchild \
 	$TESTPOOL/grandchild
-log_mustnot $ZFS rename $TESTPOOL/$TESTFS2/child/grandchild \
+log_mustnot zfs rename $TESTPOOL/$TESTFS2/child/grandchild \
 	$TESTPOOL/$TESTFS3/grandchild
-log_must $ZFS rename $TESTPOOL/$TESTFS2/child/grandchild \
+log_must zfs rename $TESTPOOL/$TESTFS2/child/grandchild \
 	$TESTPOOL/$TESTFS2/child/grandchild2
-log_must $ZFS rename $TESTPOOL/$TESTFS2/child/grandchild2 \
+log_must zfs rename $TESTPOOL/$TESTFS2/child/grandchild2 \
 	$TESTPOOL/$TESTFS2/grandchild2
 
 log_pass "'zfs rename' does not move an encrypted child outside of its" \

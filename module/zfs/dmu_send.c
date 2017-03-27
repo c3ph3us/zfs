@@ -281,11 +281,11 @@ dump_free(dmu_sendarg_t *dsp, uint64_t object, uint64_t offset,
 }
 
 static int
-dump_write(dmu_sendarg_t *dsp, dmu_object_type_t type,
-    uint64_t object, uint64_t offset, boolean_t raw, int lsize, int psize,
-    const blkptr_t *bp, void *data)
+dump_write(dmu_sendarg_t *dsp, dmu_object_type_t type, uint64_t object,
+    uint64_t offset, int lsize, int psize, const blkptr_t *bp, void *data)
 {
 	uint64_t payload_size;
+	boolean_t raw = (dsp->dsa_featureflags & DMU_BACKUP_FEATURE_RAW);
 	struct drr_write *drrw = &(dsp->dsa_drr->drr_u.drr_write);
 
 	/*
@@ -324,7 +324,7 @@ dump_write(dmu_sendarg_t *dsp, dmu_object_type_t type,
 		ASSERT3S(psize, >, 0);
 
 		if (raw) {
-			ASSERT(BP_IS_ENCRYPTED(bp));
+			ASSERT(BP_IS_PROTECTED(bp));
 
 			/*
 			 * This is a raw encrypted block so we set the encrypted
@@ -356,7 +356,7 @@ dump_write(dmu_sendarg_t *dsp, dmu_object_type_t type,
 		payload_size = drrw->drr_logical_size;
 	}
 
-	if (bp == NULL || BP_IS_EMBEDDED(bp) || (BP_IS_ENCRYPTED(bp) && !raw)) {
+	if (bp == NULL || BP_IS_EMBEDDED(bp) || (BP_IS_PROTECTED(bp) && !raw)) {
 		/*
 		 * There's no pre-computed checksum for partial-block writes,
 		 * embedded BP's, or encrypted BP's that are being sent as
@@ -372,7 +372,7 @@ dump_write(dmu_sendarg_t *dsp, dmu_object_type_t type,
 		DDK_SET_LSIZE(&drrw->drr_key, BP_GET_LSIZE(bp));
 		DDK_SET_PSIZE(&drrw->drr_key, BP_GET_PSIZE(bp));
 		DDK_SET_COMPRESS(&drrw->drr_key, BP_GET_COMPRESS(bp));
-		DDK_SET_ENCRYPTED(&drrw->drr_key, BP_IS_ENCRYPTED(bp));
+		DDK_SET_CRYPT(&drrw->drr_key, BP_IS_PROTECTED(bp));
 		drrw->drr_key.ddk_cksum = bp->blk_cksum;
 	}
 
@@ -436,7 +436,7 @@ dump_spill(dmu_sendarg_t *dsp, const blkptr_t *bp, uint64_t object, void *data)
 
 	/* handle raw send fields */
 	if ((dsp->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) != 0 &&
-	    BP_IS_ENCRYPTED(bp)) {
+	    BP_IS_PROTECTED(bp)) {
 		drrs->drr_flags |= DRR_RAW_ENCRYPTED;
 		if (BP_SHOULD_BYTESWAP(bp))
 			drrs->drr_flags |= DRR_RAW_BYTESWAP;
@@ -544,10 +544,15 @@ dump_dnode(dmu_sendarg_t *dsp, const blkptr_t *bp, uint64_t object,
 		drro->drr_blksz = SPA_OLD_MAXBLOCKSIZE;
 
 	if ((dsp->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) &&
-	    BP_IS_ENCRYPTED(bp)) {
+	    BP_IS_PROTECTED(bp)) {
 		drro->drr_flags |= DRR_RAW_ENCRYPTED;
 		if (BP_SHOULD_BYTESWAP(bp))
 			drro->drr_flags |= DRR_RAW_BYTESWAP;
+
+		/* needed for reconstructing dnp on recv side */
+		drro->drr_indblkshift = dnp->dn_indblkshift;
+		drro->drr_nlevels = dnp->dn_nlevels;
+		drro->drr_nblkptr = dnp->dn_nblkptr;
 
 		/* raw bonus buffers extend to the end of the dnp */
 		if (bonuslen != 0) {
@@ -576,7 +581,7 @@ dump_object_range(dmu_sendarg_t *dsp, const blkptr_t *bp, uint64_t firstobj,
 	    &(dsp->dsa_drr->drr_u.drr_object_range);
 
 	/* we only use this for raw sends */
-	ASSERT(BP_IS_ENCRYPTED(bp));
+	ASSERT(BP_IS_PROTECTED(bp));
 	ASSERT(dsp->dsa_featureflags & DMU_BACKUP_FEATURE_RAW);
 	ASSERT3U(BP_GET_COMPRESS(bp), ==, ZIO_COMPRESS_OFF);
 
@@ -742,8 +747,8 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 		enum zio_flag zioflags = ZIO_FLAG_CANFAIL;
 		int i;
 
-		if ((dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) &&
-		    BP_IS_ENCRYPTED(bp)) {
+		if (dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) {
+			ASSERT(BP_IS_ENCRYPTED(bp));
 			ASSERT3U(BP_GET_COMPRESS(bp), ==, ZIO_COMPRESS_OFF);
 			zioflags |= ZIO_FLAG_RAW;
 		}
@@ -762,8 +767,10 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 		 * block of dnodes. Regular sends do not need to send this
 		 * info.
 		 */
-		if (arc_is_encrypted(abuf))
+		if (dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) {
+			ASSERT(arc_is_encrypted(abuf));
 			err = dump_object_range(dsa, bp, dnobj, epb);
+		}
 
 		if (err == 0) {
 			for (i = 0; i < epb; i += blk[i].dn_extra_slots + 1) {
@@ -778,9 +785,10 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 		arc_buf_t *abuf;
 		enum zio_flag zioflags = ZIO_FLAG_CANFAIL;
 
-		if ((dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) &&
-		    BP_IS_ENCRYPTED(bp))
+		if (dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) {
+			ASSERT(BP_IS_PROTECTED(bp));
 			zioflags |= ZIO_FLAG_RAW;
+		}
 
 		if (arc_read(NULL, spa, bp, arc_getbuf_func, &abuf,
 		    ZIO_PRIORITY_ASYNC_READ, zioflags, &aflags, zb) != 0)
@@ -830,12 +838,11 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 		 * sends, so we assert that here.
 		 */
 		boolean_t request_raw =
-		    (dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) &&
-		    BP_IS_ENCRYPTED(bp);
+		    (dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) != 0;
 
 		IMPLY(request_raw, !request_compressed);
 		IMPLY(request_raw, !split_large_blocks);
-		IMPLY(request_raw, !BP_IS_EMBEDDED(bp));
+		IMPLY(request_raw, BP_IS_PROTECTED(bp));
 		ASSERT0(zb->zb_level);
 		ASSERT(zb->zb_object > dsa->dsa_resume_object ||
 		    (zb->zb_object == dsa->dsa_resume_object &&
@@ -875,15 +882,14 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 			while (blksz > 0 && err == 0) {
 				int n = MIN(blksz, SPA_OLD_MAXBLOCKSIZE);
 				err = dump_write(dsa, type, zb->zb_object,
-				    offset, B_FALSE, n, n, NULL, buf);
+				    offset, n, n, NULL, buf);
 				offset += n;
 				buf += n;
 				blksz -= n;
 			}
 		} else {
 			err = dump_write(dsa, type, zb->zb_object, offset,
-			    arc_is_encrypted(abuf), blksz, arc_buf_size(abuf),
-			    bp, abuf->b_data);
+			    blksz, arc_buf_size(abuf), bp, abuf->b_data);
 		}
 		arc_buf_destroy(abuf, &abuf);
 	}
@@ -932,6 +938,24 @@ dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *to_ds,
 	if (err != 0) {
 		dsl_pool_rele(dp, tag);
 		return (err);
+	}
+
+	/*
+	 * If this is a non-raw send of an encrypted ds, we can ensure that
+	 * the objset_phys_t is authenticated. This is safe because this is
+	 * either a snapshot or we have owned the dataset, ensuring that
+	 * it can't be modified.
+	 */
+	if (!rawok && os->os_encrypted &&
+	    arc_is_unauthenticated(os->os_phys_buf)) {
+		err = arc_untransform(os->os_phys_buf, os->os_spa,
+		    to_ds->ds_object, B_FALSE);
+		if (err != 0) {
+			dsl_pool_rele(dp, tag);
+			return (err);
+		}
+
+		ASSERT0(arc_is_unauthenticated(os->os_phys_buf));
 	}
 
 	drr = kmem_zalloc(sizeof (dmu_replay_record_t), KM_SLEEP);
@@ -1685,12 +1709,8 @@ dmu_recv_begin_check(void *arg, dmu_tx_t *tx)
 		if (drba->drba_origin != NULL) {
 			dsl_dataset_t *origin;
 
-			/*
-			 * We hold origin with DS_HOLD_FLAG_DECRYPT so that we
-			 * can check that the key is loaded for cloning.
-			 */
 			error = dsl_dataset_hold_flags(dp, drba->drba_origin,
-			    DS_HOLD_FLAG_DECRYPT, FTAG, &origin);
+			    dsflags, FTAG, &origin);
 			if (error != 0) {
 				dsl_dataset_rele_flags(ds, dsflags, FTAG);
 				return (error);
@@ -1709,7 +1729,7 @@ dmu_recv_begin_check(void *arg, dmu_tx_t *tx)
 				return (SET_ERROR(ENODEV));
 			}
 			dsl_dataset_rele_flags(origin,
-			    DS_HOLD_FLAG_DECRYPT, FTAG);
+			    dsflags, FTAG);
 		}
 		dsl_dataset_rele_flags(ds, dsflags, FTAG);
 		error = 0;
@@ -1731,6 +1751,7 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 	ds_hold_flags_t dsflags = 0;
 	int error;
 	uint64_t crflags = 0;
+	dsl_crypto_params_t *dcpp = NULL;
 	dsl_crypto_params_t dcp = { 0 };
 
 	if (drrb->drr_flags & DRR_FLAG_CI_DATA)
@@ -1738,19 +1759,23 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 	if ((featureflags & DMU_BACKUP_FEATURE_RAW) == 0) {
 		dsflags |= DS_HOLD_FLAG_DECRYPT;
 	} else {
-		dcp.cp_flags |= DCP_FLAG_RAW_RECV;
+		dcp.cp_cmd = DCP_CMD_RAW_RECV;
 	}
 
 	error = dsl_dataset_hold_flags(dp, tofs, dsflags, FTAG, &ds);
 	if (error == 0) {
 		/* create temporary clone */
 		dsl_dataset_t *snap = NULL;
+
 		if (drba->drba_snapobj != 0) {
 			VERIFY0(dsl_dataset_hold_obj(dp,
 			    drba->drba_snapobj, FTAG, &snap));
+		} else {
+			/* we use the dcp whenever we are not making a clone */
+			dcpp = &dcp;
 		}
 		dsobj = dsl_dataset_create_sync(ds->ds_dir, recv_clone_name,
-		    snap, crflags, drba->drba_cred, &dcp, tx);
+		    snap, crflags, drba->drba_cred, dcpp, tx);
 		if (drba->drba_snapobj != 0)
 			dsl_dataset_rele(snap, FTAG);
 		dsl_dataset_rele_flags(ds, dsflags, FTAG);
@@ -1764,12 +1789,14 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 		if (drba->drba_origin != NULL) {
 			VERIFY0(dsl_dataset_hold(dp, drba->drba_origin,
 			    FTAG, &origin));
+		} else {
+			/* we use the dcp whenever we are not making a clone */
+			dcpp = &dcp;
 		}
 
 		/* Create new dataset. */
-		dsobj = dsl_dataset_create_sync(dd,
-		    strrchr(tofs, '/') + 1,
-		    origin, crflags, drba->drba_cred, &dcp, tx);
+		dsobj = dsl_dataset_create_sync(dd, strrchr(tofs, '/') + 1,
+		    origin, crflags, drba->drba_cred, dcpp, tx);
 		if (origin != NULL)
 			dsl_dataset_rele(origin, FTAG);
 		dsl_dir_rele(dd, FTAG);
@@ -1830,11 +1857,14 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 	dsl_dataset_phys(newds)->ds_flags |= DS_FLAG_INCONSISTENT;
 
 	/*
-	 * If we actually created a non-clone, we need to create the
-	 * objset in our new dataset.
+	 * If we actually created a non-clone, we need to create the objset
+	 * in our new dataset. If this is a raw send we postpone this until
+	 * dmu_recv_stream() so that we can allocate the metadnode with the
+	 * properties from the DRR_BEGIN payload.
 	 */
 	rrw_enter(&newds->ds_bp_rwlock, RW_READER, FTAG);
-	if (BP_IS_HOLE(dsl_dataset_get_blkptr(newds))) {
+	if (BP_IS_HOLE(dsl_dataset_get_blkptr(newds)) &&
+	    (featureflags & DMU_BACKUP_FEATURE_RAW) == 0) {
 		(void) dmu_objset_create_impl(dp->dp_spa,
 		    newds, dsl_dataset_get_blkptr(newds), drrb->drr_type, tx);
 	}
@@ -2365,11 +2395,16 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 
 	if (DRR_IS_RAW_ENCRYPTED(drro->drr_flags)) {
 		if (drro->drr_raw_bonuslen < drro->drr_bonuslen ||
+		    drro->drr_indblkshift > SPA_MAXBLOCKSHIFT ||
+		    drro->drr_nlevels > DN_MAX_LEVELS ||
+		    drro->drr_nblkptr > DN_MAX_NBLKPTR ||
 		    DN_SLOTS_TO_BONUSLEN(drro->drr_dn_slots) <
 		    drro->drr_raw_bonuslen)
 			return (SET_ERROR(EINVAL));
 	} else {
-		if (drro->drr_flags != 0 && drro->drr_raw_bonuslen != 0)
+		if (drro->drr_flags != 0 || drro->drr_raw_bonuslen != 0 ||
+		    drro->drr_indblkshift != 0 || drro->drr_nlevels != 0 ||
+		    drro->drr_nblkptr != 0)
 			return (SET_ERROR(EINVAL));
 	}
 
@@ -2383,15 +2418,25 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 	 * If we are losing blkptrs or changing the block size this must
 	 * be a new file instance.  We must clear out the previous file
 	 * contents before we can change this type of metadata in the dnode.
+	 * Raw receives will also check that the indirect structure of the
+	 * dnode hasn't changed.
 	 */
 	if (err == 0) {
-		int nblkptr;
-
-		nblkptr = deduce_nblkptr(drro->drr_bonustype,
+		uint32_t indblksz = drro->drr_indblkshift ?
+		    1ULL << drro->drr_indblkshift : 0;
+		int nblkptr = deduce_nblkptr(drro->drr_bonustype,
 		    drro->drr_bonuslen);
 
+		/* nblkptr will be bounded by the bonus size and type */
+		if (DRR_IS_RAW_ENCRYPTED(drro->drr_flags) &&
+		    nblkptr != drro->drr_nblkptr)
+			return (SET_ERROR(EINVAL));
+
 		if (drro->drr_blksz != doi.doi_data_block_size ||
-		    nblkptr < doi.doi_nblkptr) {
+		    nblkptr < doi.doi_nblkptr ||
+		    (DRR_IS_RAW_ENCRYPTED(drro->drr_flags) &&
+		    (indblksz != doi.doi_metadata_block_size ||
+		    drro->drr_nlevels < doi.doi_indirection))) {
 			err = dmu_free_long_range(rwa->os, drro->drr_object,
 			    0, DMU_OBJECT_END);
 			if (err != 0)
@@ -2401,6 +2446,7 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 
 	tx = dmu_tx_create(rwa->os);
 	dmu_tx_hold_bonus(tx, object);
+	dmu_tx_hold_write(tx, object, 0, 0);
 	err = dmu_tx_assign(tx, TXG_WAIT);
 	if (err != 0) {
 		dmu_tx_abort(tx);
@@ -2423,7 +2469,7 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 		    drro->drr_bonustype, drro->drr_bonuslen, tx);
 	}
 	if (err != 0) {
-		dmu_tx_commit(tx);
+		dmu_tx_abort(tx);
 		return (SET_ERROR(EINVAL));
 	}
 
@@ -2431,6 +2477,19 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 	    drro->drr_checksumtype, tx);
 	dmu_object_set_compress(rwa->os, drro->drr_object,
 	    drro->drr_compress, tx);
+
+	/* handle more restrictive dnode structuring for raw recvs */
+	if (drro->drr_flags & DRR_RAW_ENCRYPTED) {
+		/*
+		 * Set the indirect block shift and nlevels. This will not fail
+		 * because we ensured all of the blocks were free earlier if
+		 * this is a new object.
+		 */
+		VERIFY0(dmu_object_set_blocksize(rwa->os, drro->drr_object,
+		    drro->drr_blksz, drro->drr_indblkshift, tx));
+		VERIFY0(dmu_object_set_nlevels(rwa->os, drro->drr_object,
+		    drro->drr_nlevels, tx));
+	}
 
 	if (data != NULL) {
 		dmu_buf_t *db;
@@ -2783,13 +2842,14 @@ receive_object_range(struct receive_writer_arg *rwa,
 		return (ret);
 	}
 
-	ret = dmu_buf_hold_by_dnode(mdn, offset, FTAG, &db, DMU_READ_PREFETCH);
+	ret = dmu_buf_hold_by_dnode(mdn, offset, FTAG, &db,
+	    DMU_READ_PREFETCH | DMU_READ_NO_DECRYPT);
 	if (ret != 0) {
 		dmu_tx_commit(tx);
 		return (ret);
 	}
 
-	dmu_buf_will_dirty(db, tx);
+	dmu_buf_will_change_crypt_params(db, tx);
 	dmu_convert_to_raw(db, byteorder, drror->drr_salt, drror->drr_iv,
 	    drror->drr_mac);
 	dmu_buf_rele(db, FTAG);
@@ -3421,7 +3481,8 @@ dmu_recv_stream(dmu_recv_cookie_t *drc, vnode_t *vp, offset_t *voffp,
 			goto out;
 
 		err = dsl_crypto_recv_key(spa_name(ra->os->os_spa),
-		    drc->drc_ds->ds_object, keynvl);
+		    drc->drc_ds->ds_object, drc->drc_drrb->drr_type,
+		    keynvl);
 		if (err != 0)
 			goto out;
 	}
@@ -3590,6 +3651,7 @@ dmu_recv_end_sync(void *arg, dmu_tx_t *tx)
 {
 	dmu_recv_cookie_t *drc = arg;
 	dsl_pool_t *dp = dmu_tx_pool(tx);
+	boolean_t encrypted = drc->drc_ds->ds_dir->dd_crypto_obj != 0;
 
 	spa_history_log_internal_ds(drc->drc_ds, "finish receiving",
 	    tx, "snap=%s", drc->drc_tosnap);
@@ -3690,9 +3752,10 @@ dmu_recv_end_sync(void *arg, dmu_tx_t *tx)
 	 * we can evict its bonus buffer. Since the dataset may be destroyed
 	 * at this point (and therefore won't have a valid pointer to the spa)
 	 * we release the key mapping manually here while we do have a valid
-	 * pointer.
+	 * pointer, if it exists.
 	 */
-	if (!drc->drc_raw) {
+	if (!drc->drc_raw && encrypted) {
+		atomic_dec_32(&drc->drc_ds->ds_key_mappings);
 		(void) spa_keystore_remove_mapping(dmu_tx_pool(tx)->dp_spa,
 		    drc->drc_ds->ds_object, drc->drc_ds);
 	}

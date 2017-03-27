@@ -121,22 +121,27 @@ typedef enum arc_flags
 	ARC_FLAG_L2_WRITING		= 1 << 11,	/* write in progress */
 	ARC_FLAG_L2_EVICTED		= 1 << 12,	/* evicted during I/O */
 	ARC_FLAG_L2_WRITE_HEAD		= 1 << 13,	/* head of write list */
-	/* encrypted on disk (may or may not be encrypted in memory) */
-	ARC_FLAG_ENCRYPTED		= 1 << 14,
+	/*
+	 * Encrypted or authenticated on disk (may be plaintext in memory).
+	 * This header has b_crypt_hdr allocated.
+	 */
+	ARC_FLAG_PROTECTED		= 1 << 14,
+	/* data has not been authenticated yet */
+	ARC_FLAG_NOAUTH			= 1 << 15,
 	/* indicates that the buffer contains metadata (otherwise, data) */
-	ARC_FLAG_BUFC_METADATA		= 1 << 15,
+	ARC_FLAG_BUFC_METADATA		= 1 << 16,
 
 	/* Flags specifying whether optional hdr struct fields are defined */
-	ARC_FLAG_HAS_L1HDR		= 1 << 16,
-	ARC_FLAG_HAS_L2HDR		= 1 << 17,
+	ARC_FLAG_HAS_L1HDR		= 1 << 17,
+	ARC_FLAG_HAS_L2HDR		= 1 << 18,
 
 	/*
 	 * Indicates the arc_buf_hdr_t's b_pdata matches the on-disk data.
 	 * This allows the l2arc to use the blkptr's checksum to verify
 	 * the data without having to store the checksum in the hdr.
 	 */
-	ARC_FLAG_COMPRESSED_ARC		= 1 << 18,
-	ARC_FLAG_SHARED_DATA		= 1 << 19,
+	ARC_FLAG_COMPRESSED_ARC		= 1 << 19,
+	ARC_FLAG_SHARED_DATA		= 1 << 20,
 
 	/*
 	 * The arc buffer's compression mode is stored in the top 7 bits of the
@@ -225,6 +230,7 @@ void arc_space_consume(uint64_t space, arc_space_type_t type);
 void arc_space_return(uint64_t space, arc_space_type_t type);
 boolean_t arc_is_metadata(arc_buf_t *buf);
 boolean_t arc_is_encrypted(arc_buf_t *buf);
+boolean_t arc_is_unauthenticated(arc_buf_t *buf);
 enum zio_compress arc_get_compression(arc_buf_t *buf);
 void arc_get_raw_params(arc_buf_t *buf, boolean_t *byteorder, uint8_t *salt,
     uint8_t *iv, uint8_t *mac);

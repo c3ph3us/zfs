@@ -70,7 +70,7 @@ typeset -i i=0
 while (( i < ${#ENCRYPTION_ALGS[*]} )); do
 	typeset -i j=0
 	while (( j < ${#KEYFORMATS[*]} )); do
-		log_must eval "$ECHO ${USER_KEYS[j]} | $ZPOOL create" \
+		log_must eval "echo ${USER_KEYS[j]} | zpool create" \
 		"-O ${ENCRYPTION_ALGS[i]} -O ${KEYFORMATS[j]}" \
 		"$TESTPOOL $DISKS"
 
@@ -79,7 +79,7 @@ while (( i < ${#ENCRYPTION_ALGS[*]} )); do
 		propertycheck $TESTPOOL ${KEY_FORMATS[j]} || \
 			log_fail "failed to set ${KEYFORMATS[j]}"
 
-		log_must $ZPOOL destroy $TESTPOOL
+		log_must zpool destroy $TESTPOOL
 		(( j = j + 1 ))
 	done
 	(( i = i + 1 ))

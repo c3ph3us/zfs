@@ -44,7 +44,7 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
+		log_must zfs destroy $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
@@ -52,21 +52,21 @@ log_assert "'zfs load-key -L' should override keylocation with provided value"
 
 typeset key_location="/$TESTPOOL/pkey1"
 
-log_must eval "$ECHO $PASSPHRASE > $key_location"
-log_must $CP $key_location /$TESTPOOL/pkey2
+log_must eval "echo $PASSPHRASE > $key_location"
+log_must cp $key_location /$TESTPOOL/pkey2
 
-log_must $ZFS create -o encryption=on -o keyformat=passphrase \
+log_must zfs create -o encryption=on -o keyformat=passphrase \
 	-o keylocation=file://$key_location $TESTPOOL/$TESTFS1
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
 
-log_must $ZFS load-key -L file:///$TESTPOOL/pkey2 $TESTPOOL/$TESTFS1
+log_must zfs load-key -L file:///$TESTPOOL/pkey2 $TESTPOOL/$TESTFS1
 log_must key_available $TESTPOOL/$TESTFS1
 log_must verify_keylocation $TESTPOOL/$TESTFS1 "file://$key_location"
 
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
-log_must eval "$ECHO $PASSPHRASE | $ZFS load-key -L prompt $TESTPOOL/$TESTFS1"
+log_must zfs unload-key $TESTPOOL/$TESTFS1
+log_must eval "echo $PASSPHRASE | zfs load-key -L prompt $TESTPOOL/$TESTFS1"
 log_must key_available $TESTPOOL/$TESTFS1
 log_must verify_keylocation $TESTPOOL/$TESTFS1 "file://$key_location"
 

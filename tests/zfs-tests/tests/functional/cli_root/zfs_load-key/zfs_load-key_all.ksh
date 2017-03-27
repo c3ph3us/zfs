@@ -38,40 +38,40 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
-	datasetexists $TESTPOOL/zvol && log_must $ZFS destroy $TESTPOOL/zvol
+		log_must zfs destroy $TESTPOOL/$TESTFS1
+	datasetexists $TESTPOOL/zvol && log_must zfs destroy $TESTPOOL/zvol
 	poolexists $TESTPOOL1 && log_must destroy_pool $TESTPOOL1
 }
 log_onexit cleanup
 
 log_assert "'zfs load-key -a' should load keys for all datasets"
 
-log_must eval "$ECHO $PASSPHRASE1 > /$TESTPOOL/pkey"
-log_must $ZFS create -o encryption=on -o keyformat=passphrase \
+log_must eval "echo $PASSPHRASE1 > /$TESTPOOL/pkey"
+log_must zfs create -o encryption=on -o keyformat=passphrase \
 	-o keylocation=file:///$TESTPOOL/pkey $TESTPOOL/$TESTFS1
 
-log_must $ZFS create -V 64M -o encryption=on -o keyformat=passphrase \
+log_must zfs create -V 64M -o encryption=on -o keyformat=passphrase \
 	-o keylocation=file:///$TESTPOOL/pkey $TESTPOOL/zvol
 
-typeset DISK2="$($ECHO $DISKS | $AWK '{ print $2}')"
-log_must $ZPOOL create -O encryption=on -O keyformat=passphrase \
+typeset DISK2="$(echo $DISKS | awk '{ print $2}')"
+log_must zpool create -O encryption=on -O keyformat=passphrase \
 	-O keylocation=file:///$TESTPOOL/pkey $TESTPOOL1 $DISK2
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
 
-log_must $ZFS unload-key $TESTPOOL/zvol
+log_must zfs unload-key $TESTPOOL/zvol
 
-log_must $ZFS unmount $TESTPOOL1
-log_must $ZFS unload-key $TESTPOOL1
+log_must zfs unmount $TESTPOOL1
+log_must zfs unload-key $TESTPOOL1
 
-log_must $ZFS load-key -a
+log_must zfs load-key -a
 
 log_must key_available $TESTPOOL1
 log_must key_available $TESTPOOL/zvol
 log_must key_available $TESTPOOL/$TESTFS1
 
-log_must $ZFS mount $TESTPOOL1
-log_must $ZFS mount $TESTPOOL/$TESTFS1
+log_must zfs mount $TESTPOOL1
+log_must zfs mount $TESTPOOL/$TESTFS1
 
 log_pass "'zfs load-key -a' loads keys for all datasets"

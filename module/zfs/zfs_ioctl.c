@@ -1503,7 +1503,7 @@ zfs_ioc_pool_create(zfs_cmd_t *zc)
 
 	if (props) {
 		nvlist_t *nvl = NULL;
-		nvlist_t *ha = NULL;
+		nvlist_t *hidden_args = NULL;
 		uint64_t version = SPA_VERSION;
 
 		(void) nvlist_lookup_uint64(props,
@@ -1523,8 +1523,10 @@ zfs_ioc_pool_create(zfs_cmd_t *zc)
 			(void) nvlist_remove_all(props, ZPOOL_ROOTFS_PROPS);
 		}
 
-		(void) nvlist_lookup_nvlist(props, ZPOOL_HIDDEN_ARGS, &ha);
-		error = dsl_crypto_params_create_nvlist(rootprops, ha, &dcp);
+		(void) nvlist_lookup_nvlist(props, ZPOOL_HIDDEN_ARGS,
+		    &hidden_args);
+		error = dsl_crypto_params_create_nvlist(DCP_CMD_NONE,
+		    rootprops, hidden_args, &dcp);
 		if (error != 0) {
 			nvlist_free(config);
 			nvlist_free(props);
@@ -1823,15 +1825,16 @@ zfs_ioc_obj_to_path(zfs_cmd_t *zc)
 	int error;
 
 	/* XXX reading from objset not owned */
-	if ((error = dmu_objset_hold(zc->zc_name, FTAG, &os)) != 0)
+	if ((error = dmu_objset_hold_flags(zc->zc_name, B_TRUE,
+	    FTAG, &os)) != 0)
 		return (error);
 	if (dmu_objset_type(os) != DMU_OST_ZFS) {
-		dmu_objset_rele(os, FTAG);
+		dmu_objset_rele_flags(os, B_TRUE, FTAG);
 		return (SET_ERROR(EINVAL));
 	}
 	error = zfs_obj_to_path(os, zc->zc_obj, zc->zc_value,
 	    sizeof (zc->zc_value));
-	dmu_objset_rele(os, FTAG);
+	dmu_objset_rele_flags(os, B_TRUE, FTAG);
 
 	return (error);
 }
@@ -1852,15 +1855,16 @@ zfs_ioc_obj_to_stats(zfs_cmd_t *zc)
 	int error;
 
 	/* XXX reading from objset not owned */
-	if ((error = dmu_objset_hold(zc->zc_name, FTAG, &os)) != 0)
+	if ((error = dmu_objset_hold_flags(zc->zc_name, B_TRUE,
+	    FTAG, &os)) != 0)
 		return (error);
 	if (dmu_objset_type(os) != DMU_OST_ZFS) {
-		dmu_objset_rele(os, FTAG);
+		dmu_objset_rele_flags(os, B_TRUE, FTAG);
 		return (SET_ERROR(EINVAL));
 	}
 	error = zfs_obj_to_stats(os, zc->zc_obj, &zc->zc_stat, zc->zc_value,
 	    sizeof (zc->zc_value));
-	dmu_objset_rele(os, FTAG);
+	dmu_objset_rele_flags(os, B_TRUE, FTAG);
 
 	return (error);
 }
@@ -2406,7 +2410,7 @@ zfs_prop_set_special(const char *dsname, zprop_source_t source,
 {
 	const char *propname = nvpair_name(pair);
 	zfs_prop_t prop = zfs_name_to_prop(propname);
-	uint64_t intval;
+	uint64_t intval = 0;
 	char *strval = NULL;
 	int err = -1;
 
@@ -2425,9 +2429,6 @@ zfs_prop_set_special(const char *dsname, zprop_source_t source,
 
 	/* all special properties are numeric except for keylocation */
 	if (zfs_prop_get_type(prop) == PROP_TYPE_STRING) {
-		if (prop != ZFS_PROP_KEYLOCATION)
-			return (-1);
-
 		strval = fnvpair_value_string(pair);
 	} else {
 		intval = fnvpair_value_uint64(pair);
@@ -2456,7 +2457,7 @@ zfs_prop_set_special(const char *dsname, zprop_source_t source,
 			err = -1;
 		break;
 	case ZFS_PROP_KEYLOCATION:
-		err = dsl_crypto_can_set_keylocation(dsname, source, strval);
+		err = dsl_crypto_can_set_keylocation(dsname, strval);
 
 		/*
 		 * Set err to -1 to force the zfs_set_prop_nvlist code down the
@@ -3279,7 +3280,8 @@ zfs_ioc_create(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 		}
 	}
 
-	error = dsl_crypto_params_create_nvlist(nvprops, hidden_args, &dcp);
+	error = dsl_crypto_params_create_nvlist(DCP_CMD_NONE, nvprops,
+	    hidden_args, &dcp);
 	if (error != 0) {
 		nvlist_free(zct.zct_zplprops);
 		return (error);
@@ -3336,14 +3338,11 @@ zfs_ioc_clone(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 {
 	int error = 0;
 	nvlist_t *nvprops = NULL;
-	nvlist_t *hidden_args = NULL;
-	dsl_crypto_params_t *dcp = NULL;
 	char *origin_name;
 
 	if (nvlist_lookup_string(innvl, "origin", &origin_name) != 0)
 		return (SET_ERROR(EINVAL));
 	(void) nvlist_lookup_nvlist(innvl, "props", &nvprops);
-	(void) nvlist_lookup_nvlist(innvl, ZPOOL_HIDDEN_ARGS, &hidden_args);
 
 	if (strchr(fsname, '@') ||
 	    strchr(fsname, '%'))
@@ -3352,13 +3351,7 @@ zfs_ioc_clone(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 	if (dataset_namecheck(origin_name, NULL, NULL) != 0)
 		return (SET_ERROR(EINVAL));
 
-	error = dsl_crypto_params_create_nvlist(nvprops, hidden_args, &dcp);
-	if (error != 0)
-		return (error);
-
-	error = dmu_objset_clone(fsname, origin_name, dcp);
-
-	dsl_crypto_params_free(dcp, !!error);
+	error = dmu_objset_clone(fsname, origin_name);
 
 	/*
 	 * It would be nice to do this atomically.
@@ -4337,14 +4330,6 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, char *origin, nvlist_t *recvprops,
 			(void) zfs_set_prop_nvlist(tofs, ZPROP_SRC_RECEIVED,
 			    recvprops, *errors);
 		}
-	} else if (drc.drc_raw) {
-		/*
-		 * Raw send streams default to a "prompt" keylocation if
-		 * no properties are given.
-		 */
-		delayprops = fnvlist_alloc();
-		fnvlist_add_string(delayprops,
-		    zfs_prop_to_name(ZFS_PROP_KEYLOCATION), "prompt");
 	}
 
 	if (localprops != NULL) {
@@ -4425,8 +4410,7 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, char *origin, nvlist_t *recvprops,
 		 * Since zfs_ioc_recv_inject_err is only in DEBUG kernels,
 		 * using ASSERT() will be just like a VERIFY.
 		 */
-		if (recvprops != NULL)
-			ASSERT(nvlist_merge(recvprops, delayprops, 0) == 0);
+		ASSERT(nvlist_merge(recvprops, delayprops, 0) == 0);
 		nvlist_free(delayprops);
 	}
 
@@ -5180,12 +5164,12 @@ zfs_ioc_userspace_upgrade(zfs_cmd_t *zc)
 		deactivate_super(zfsvfs->z_sb);
 	} else {
 		/* XXX kind of reading contents without owning */
-		error = dmu_objset_hold(zc->zc_name, FTAG, &os);
+		error = dmu_objset_hold_flags(zc->zc_name, B_TRUE, FTAG, &os);
 		if (error != 0)
 			return (error);
 
 		error = dmu_objset_userspace_upgrade(os);
-		dmu_objset_rele(os, FTAG);
+		dmu_objset_rele_flags(os, B_TRUE, FTAG);
 	}
 
 	return (error);
@@ -5204,7 +5188,7 @@ zfs_ioc_userobjspace_upgrade(zfs_cmd_t *zc)
 	objset_t *os;
 	int error;
 
-	error = dmu_objset_hold(zc->zc_name, FTAG, &os);
+	error = dmu_objset_hold_flags(zc->zc_name, B_TRUE, FTAG, &os);
 	if (error != 0)
 		return (error);
 
@@ -5228,7 +5212,7 @@ zfs_ioc_userobjspace_upgrade(zfs_cmd_t *zc)
 	}
 
 	dsl_dataset_long_rele(dmu_objset_ds(os), FTAG);
-	dsl_dataset_rele(dmu_objset_ds(os), FTAG);
+	dsl_dataset_rele_flags(dmu_objset_ds(os), DS_HOLD_FLAG_DECRYPT, FTAG);
 
 	return (error);
 }
@@ -5987,7 +5971,8 @@ zfs_ioc_load_key(const char *dsname, nvlist_t *innvl, nvlist_t *outnvl)
 		goto error;
 	}
 
-	ret = dsl_crypto_params_create_nvlist(NULL, hidden_args, &dcp);
+	ret = dsl_crypto_params_create_nvlist(DCP_CMD_NONE, NULL,
+	    hidden_args, &dcp);
 	if (ret != 0)
 		goto error;
 
@@ -5995,7 +5980,7 @@ zfs_ioc_load_key(const char *dsname, nvlist_t *innvl, nvlist_t *outnvl)
 	if (ret != 0)
 		goto error;
 
-	dsl_crypto_params_free(dcp, B_FALSE);
+	dsl_crypto_params_free(dcp, noop);
 
 	return (0);
 
@@ -6045,6 +6030,7 @@ static int
 zfs_ioc_change_key(const char *dsname, nvlist_t *innvl, nvlist_t *outnvl)
 {
 	int ret;
+	uint64_t cmd = DCP_CMD_NONE;
 	dsl_crypto_params_t *dcp = NULL;
 	nvlist_t *args = NULL, *hidden_args = NULL;
 
@@ -6053,14 +6039,15 @@ zfs_ioc_change_key(const char *dsname, nvlist_t *innvl, nvlist_t *outnvl)
 		goto error;
 	}
 
+	(void) nvlist_lookup_uint64(innvl, "crypt_cmd", &cmd);
 	(void) nvlist_lookup_nvlist(innvl, "props", &args);
 	(void) nvlist_lookup_nvlist(innvl, ZPOOL_HIDDEN_ARGS, &hidden_args);
 
-	ret = dsl_crypto_params_create_nvlist(args, hidden_args, &dcp);
+	ret = dsl_crypto_params_create_nvlist(cmd, args, hidden_args, &dcp);
 	if (ret != 0)
 		goto error;
 
-	ret = spa_keystore_rewrap(dsname, dcp);
+	ret = spa_keystore_change_key(dsname, dcp);
 	if (ret != 0)
 		goto error;
 

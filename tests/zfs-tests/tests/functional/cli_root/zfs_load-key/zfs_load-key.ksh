@@ -46,7 +46,7 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
+		log_must zfs destroy $TESTPOOL/$TESTFS1
 	poolexists $TESTPOOL1 && log_must destroy_pool $TESTPOOL1
 }
 log_onexit cleanup
@@ -54,32 +54,32 @@ log_onexit cleanup
 log_assert "'zfs load-key' should only load the key for an" \
 	"unloaded encrypted dataset"
 
-log_mustnot eval "$ECHO $PASSPHRASE | $ZFS load-key $TESTPOOL/$TESTFS"
+log_mustnot eval "echo $PASSPHRASE | zfs load-key $TESTPOOL/$TESTFS"
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS
-log_mustnot eval "$ECHO $PASSPHRASE | $ZFS load-key $TESTPOOL/$TESTFS"
+log_must zfs unmount $TESTPOOL/$TESTFS
+log_mustnot eval "echo $PASSPHRASE | zfs load-key $TESTPOOL/$TESTFS"
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS1"
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS load-key $TESTPOOL/$TESTFS1"
+log_must eval "echo $PASSPHRASE | zfs load-key $TESTPOOL/$TESTFS1"
 log_must key_available $TESTPOOL/$TESTFS1
 
-log_mustnot eval "$ECHO $PASSPHRASE | $ZFS load-key $TESTPOOL/$TESTFS1"
+log_mustnot eval "echo $PASSPHRASE | zfs load-key $TESTPOOL/$TESTFS1"
 
-typeset DISK2="$($ECHO $DISKS | $AWK '{ print $2 }')"
-log_must eval "$ECHO $PASSPHRASE | $ZPOOL create -O encryption=on" \
+typeset DISK2="$(echo $DISKS | awk '{ print $2 }')"
+log_must eval "echo $PASSPHRASE | zpool create -O encryption=on" \
 	"-O keyformat=passphrase -O keylocation=prompt $TESTPOOL1 $DISK2"
 
-log_must $ZFS unmount $TESTPOOL1
-log_must $ZFS unload-key $TESTPOOL1
+log_must zfs unmount $TESTPOOL1
+log_must zfs unload-key $TESTPOOL1
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS load-key $TESTPOOL1"
+log_must eval "echo $PASSPHRASE | zfs load-key $TESTPOOL1"
 log_must key_available $TESTPOOL1
 
-log_mustnot eval "$ECHO $PASSPHRASE | $ZFS load-key $TESTPOOL1"
+log_mustnot eval "echo $PASSPHRASE | zfs load-key $TESTPOOL1"
 
 log_pass "'zfs load-key' only loads the key for an unloaded encrypted dataset"

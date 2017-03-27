@@ -385,7 +385,8 @@ zio_checksum_compute(zio_t *zio, enum zio_checksum checksum,
 
 		ci->ci_func[0](abd, size, spa->spa_cksum_tmpls[checksum],
 		    &cksum);
-		if (bp != NULL && BP_IS_ENCRYPTED(bp))
+		if (bp != NULL && BP_USES_CRYPT(bp) &&
+		    BP_GET_TYPE(bp) != DMU_OT_OBJSET)
 			zio_checksum_handle_crypt(&cksum, &saved, insecure);
 
 		abd_copy_from_buf_off(abd, &cksum,
@@ -395,7 +396,7 @@ zio_checksum_compute(zio_t *zio, enum zio_checksum checksum,
 		saved = bp->blk_cksum;
 		ci->ci_func[0](abd, size, spa->spa_cksum_tmpls[checksum],
 		    &cksum);
-		if (BP_IS_ENCRYPTED(bp))
+		if (BP_USES_CRYPT(bp) && BP_GET_TYPE(bp) != DMU_OT_OBJSET)
 			zio_checksum_handle_crypt(&cksum, &saved, insecure);
 		bp->blk_cksum = cksum;
 	}
@@ -488,8 +489,11 @@ zio_checksum_error_impl(spa_t *spa, const blkptr_t *bp,
 	 * MAC checksums are a special case since half of this checksum will
 	 * actually be the encryption MAC. This will be verified by the
 	 * decryption process, so we just check the truncated checksum now.
+	 * Objset blocks use embedded MACs so we don't truncate the checksum
+	 * for them.
 	 */
-	if (bp != NULL && BP_IS_ENCRYPTED(bp)) {
+	if (bp != NULL && BP_USES_CRYPT(bp) &&
+	    BP_GET_TYPE(bp) != DMU_OT_OBJSET) {
 		if (!(ci->ci_flags & ZCHECKSUM_FLAG_DEDUP)) {
 			actual_cksum.zc_word[0] ^= actual_cksum.zc_word[2];
 			actual_cksum.zc_word[1] ^= actual_cksum.zc_word[3];

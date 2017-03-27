@@ -489,8 +489,25 @@ _NOTE(CONSTCOND) } while (0)
 #define	BP_GET_LEVEL(bp)		BF64_GET((bp)->blk_prop, 56, 5)
 #define	BP_SET_LEVEL(bp, x)		BF64_SET((bp)->blk_prop, 56, 5, x)
 
-#define	BP_IS_ENCRYPTED(bp)		BF64_GET((bp)->blk_prop, 61, 1)
-#define	BP_SET_ENCRYPTED(bp, x)		BF64_SET((bp)->blk_prop, 61, 1, x)
+/* encrypted, authenticated, and MAC cksum bps use the same bit */
+#define	BP_USES_CRYPT(bp)		BF64_GET((bp)->blk_prop, 61, 1)
+#define	BP_SET_CRYPT(bp, x)		BF64_SET((bp)->blk_prop, 61, 1, x)
+
+#define	BP_IS_ENCRYPTED(bp)			\
+	(BP_USES_CRYPT(bp) &&			\
+	BP_GET_LEVEL(bp) <= 0 &&		\
+	DMU_OT_IS_ENCRYPTED(BP_GET_TYPE(bp)))
+
+#define	BP_IS_AUTHENTICATED(bp)			\
+	(BP_USES_CRYPT(bp) &&			\
+	BP_GET_LEVEL(bp) <= 0 &&		\
+	!DMU_OT_IS_ENCRYPTED(BP_GET_TYPE(bp)))
+
+#define	BP_HAS_INDIRECT_MAC_CKSUM(bp)		\
+	(BP_USES_CRYPT(bp) && BP_GET_LEVEL(bp) > 0)
+
+#define	BP_IS_PROTECTED(bp)			\
+	(BP_IS_ENCRYPTED(bp) || BP_IS_AUTHENTICATED(bp))
 
 #define	BP_GET_DEDUP(bp)		BF64_GET((bp)->blk_prop, 62, 1)
 #define	BP_SET_DEDUP(bp, x)		BF64_SET((bp)->blk_prop, 62, 1, x)
@@ -665,7 +682,7 @@ _NOTE(CONSTCOND) } while (0)
 		    type,						\
 		    checksum,						\
 		    compress,						\
-		    BP_IS_ENCRYPTED(bp) ? "encrypted" : "unencrypted",	\
+		    BP_USES_CRYPT(bp) ? "crypt" : "nocrypt",		\
 		    BP_GET_BYTEORDER(bp) == 0 ? "BE" : "LE",		\
 		    BP_IS_GANG(bp) ? "gang" : "contiguous",		\
 		    BP_GET_DEDUP(bp) ? "dedup" : "unique",		\

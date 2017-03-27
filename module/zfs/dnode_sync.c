@@ -575,9 +575,8 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 
 	/* do user accounting if it is enabled and this is not a raw recv */
 	if (dmu_objset_userused_enabled(os) &&
-	    !DMU_OBJECT_IS_SPECIAL(dn->dn_object) && (!os->os_encrypted ||
-	    spa_keystore_lookup_key(os->os_spa, dmu_objset_id(os),
-	    NULL, NULL) == 0)) {
+	    !DMU_OBJECT_IS_SPECIAL(dn->dn_object) &&
+	    (!os->os_encrypted || dmu_objset_key_mapped(os))) {
 		mutex_enter(&dn->dn_mtx);
 		dn->dn_oldused = DN_USED_BYTES(dn->dn_phys);
 		dn->dn_oldflags = dn->dn_phys->dn_flags;
@@ -588,7 +587,7 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 		mutex_exit(&dn->dn_mtx);
 		dmu_objset_userquota_get_ids(dn, B_FALSE, tx);
 	} else {
-		/* Once we account for it, we should always account for it. */
+		/* Once we account for it, we should always account for it */
 		ASSERT(!(dn->dn_phys->dn_flags &
 		    DNODE_FLAG_USERUSED_ACCOUNTED));
 		ASSERT(!(dn->dn_phys->dn_flags &

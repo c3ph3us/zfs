@@ -71,9 +71,9 @@ post =
 tests = ['zfs_001_neg', 'zfs_002_pos', 'zfs_003_neg']
 
 [tests/functional/cli_root/zfs_change-key]
-tests = ['zfs_change-key', 'zfs_change-key_child', 'zfs_change-key_load',
-    'zfs_change-key_inherit', 'zfs_change-key_location',
-    'zfs_change-key_format', 'zfs_change-key_pbkdf2iters']
+tests = ['zfs_change-key', 'zfs_change-key_child', 'zfs_change-key_format',
+    'zfs_change-key_inherit', 'zfs_change-key_load', 'zfs_change-key_location',
+    'zfs_change-key_pbkdf2iters']
 
 [tests/functional/cli_root/zfs_clone]
 tests = ['zfs_clone_001_neg', 'zfs_clone_002_pos', 'zfs_clone_003_pos',
@@ -136,8 +136,9 @@ tests = ['zfs_receive_001_pos', 'zfs_receive_002_pos', 'zfs_receive_003_pos',
     'zfs_receive_007_neg', 'zfs_receive_008_pos', 'zfs_receive_009_neg',
     'zfs_receive_010_pos', 'zfs_receive_011_pos', 'zfs_receive_012_pos',
     'zfs_receive_013_pos', 'zfs_receive_014_pos', 'zfs_receive_015_pos',
-    'receive-o-x_props_override', 'zfs_receive_encrypted_pos',
-    'zfs_receive_encrypted_neg']
+    'receive-o-x_props_override', 'zfs_receive_from_encrypted',
+    'zfs_receive_to_encrypted', 'zfs_receive_raw',
+    'zfs_receive_raw_incremental']
 
 # zfs_rename_006_pos - https://github.com/zfsonlinux/zfs/issues/5647
 # zfs_rename_009_neg - https://github.com/zfsonlinux/zfs/issues/5648
@@ -159,7 +160,8 @@ tests = ['zfs_rollback_001_pos', 'zfs_rollback_002_pos',
 [tests/functional/cli_root/zfs_send]
 tests = ['zfs_send_001_pos', 'zfs_send_002_pos', 'zfs_send_003_pos',
     'zfs_send_004_neg', 'zfs_send_005_pos', 'zfs_send_006_pos',
-    'zfs_send_007_pos', 'zfs_send_encrypted_pos', 'zfs_send_encrypted_neg']
+    'zfs_send_007_pos', 'zfs_send_encrypted',
+    'zfs_send_encrypted_unloaded', 'zfs_send_raw']
 
 [tests/functional/cli_root/zfs_set]
 tests = ['cache_001_pos', 'cache_002_neg', 'canmount_001_pos',

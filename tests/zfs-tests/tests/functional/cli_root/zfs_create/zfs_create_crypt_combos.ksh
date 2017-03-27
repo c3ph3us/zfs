@@ -37,7 +37,7 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy -f $TESTPOOL/$TESTFS1
+		log_must zfs destroy -f $TESTPOOL/$TESTFS1
 }
 
 log_onexit cleanup
@@ -75,7 +75,7 @@ typeset -i i=0
 while (( i < ${#ENCRYPTION_ALGS[*]} )); do
 	typeset -i j=0
 	while (( j < ${#KEYFORMATS[*]} )); do
-		log_must eval "$ECHO ${USER_KEYS[j]} | $ZFS create" \
+		log_must eval "echo ${USER_KEYS[j]} | zfs create" \
 			"-o ${ENCRYPTION_ALGS[i]} -o ${KEYFORMATS[j]}" \
 			"$TESTPOOL/$TESTFS1"
 
@@ -88,7 +88,7 @@ while (( i < ${#ENCRYPTION_ALGS[*]} )); do
 		propertycheck $TESTPOOL/$TESTFS1 ${KEYFORMATS[j]} || \
 			log_fail "failed to set ${KEYFORMATS[j]}"
 
-		log_must $ZFS destroy -f $TESTPOOL/$TESTFS1
+		log_must zfs destroy -f $TESTPOOL/$TESTFS1
 		(( j = j + 1 ))
 	done
 	(( i = i + 1 ))

@@ -50,20 +50,20 @@ typeset PASSKEY="abcdefgh"
 function cleanup
 {
 	datasetexists $TESTPOOL/$CRYPTDS && \
-		log_must $ZFS destroy -f $TESTPOOL/$CRYPTDS
+		log_must zfs destroy -f $TESTPOOL/$CRYPTDS
 }
 
 log_onexit cleanup
 
 log_assert "'zfs mount -l' should properly load a valid wrapping key"
 
-log_must eval 'echo $PASSKEY | $ZFS create -o encryption=on \
+log_must eval 'echo $PASSKEY | zfs create -o encryption=on \
 	-o keyformat=passphrase $TESTPOOL/$CRYPTDS'
 
-log_must $ZFS unmount $TESTPOOL/$CRYPTDS
-log_must $ZFS unload-key $TESTPOOL/$CRYPTDS
+log_must zfs unmount $TESTPOOL/$CRYPTDS
+log_must zfs unload-key $TESTPOOL/$CRYPTDS
 
-log_must eval '$ECHO $PASSKEY | $ZFS mount -l $TESTPOOL/$CRYPTDS'
+log_must eval 'echo $PASSKEY | zfs mount -l $TESTPOOL/$CRYPTDS'
 mounted $TESTPOOL/$CRYPTDS || \
 	log_fail "Filesystem $TESTPOOL/$TESTFS is unmounted"
 

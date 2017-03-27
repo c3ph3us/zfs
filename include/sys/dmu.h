@@ -303,8 +303,7 @@ void dmu_objset_evict_dbufs(objset_t *os);
 int dmu_objset_create(const char *name, dmu_objset_type_t type, uint64_t flags,
     struct dsl_crypto_params *dcp, dmu_objset_create_sync_func_t func,
     void *arg);
-int dmu_objset_clone(const char *name, const char *origin,
-	struct dsl_crypto_params *dcp);
+int dmu_objset_clone(const char *name, const char *origin);
 int dsl_destroy_snapshots_nvl(struct nvlist *snaps, boolean_t defer,
     struct nvlist *errlist);
 int dmu_objset_snapshot_one(const char *fsname, const char *snapname);
@@ -413,6 +412,13 @@ int dmu_object_free(objset_t *os, uint64_t object, dmu_tx_t *tx);
  */
 int dmu_object_next(objset_t *os, uint64_t *objectp,
     boolean_t hole, uint64_t txg);
+
+/*
+ * Set the number of levels on a dnode. nlevels must be greater than the
+ * current number of levels or an EINVAL will be returned.
+ */
+int dmu_object_set_nlevels(objset_t *os, uint64_t object, int nlevels,
+    dmu_tx_t *tx);
 
 /*
  * Set the data blocksize for an object.
@@ -682,6 +688,7 @@ struct blkptr *dmu_buf_get_blkptr(dmu_buf_t *db);
  * (ie. you've called dmu_tx_hold_object(tx, db->db_object)).
  */
 void dmu_buf_will_dirty(dmu_buf_t *db, dmu_tx_t *tx);
+void dmu_buf_will_change_crypt_params(dmu_buf_t *db, dmu_tx_t *tx);
 
 /*
  * You must create a transaction, then hold the objects which you will
@@ -929,6 +936,7 @@ extern struct spa *dmu_objset_spa(objset_t *os);
 extern struct zilog *dmu_objset_zil(objset_t *os);
 extern struct dsl_pool *dmu_objset_pool(objset_t *os);
 extern struct dsl_dataset *dmu_objset_ds(objset_t *os);
+extern boolean_t dmu_objset_key_mapped(objset_t *os);
 extern void dmu_objset_name(objset_t *os, char *buf);
 extern dmu_objset_type_t dmu_objset_type(objset_t *os);
 extern uint64_t dmu_objset_id(objset_t *os);

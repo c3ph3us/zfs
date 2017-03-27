@@ -107,6 +107,13 @@ dmu_objset_zil(objset_t *os)
 	return (os->os_zil);
 }
 
+boolean_t
+dmu_objset_key_mapped(objset_t *os)
+{
+	return ((os->os_dsl_dataset) ?
+	    os->os_dsl_dataset->ds_key_mappings != 0 : B_FALSE);
+}
+
 dsl_pool_t *
 dmu_objset_pool(objset_t *os)
 {
@@ -391,16 +398,24 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	if (!BP_IS_HOLE(os->os_rootbp)) {
 		arc_flags_t aflags = ARC_FLAG_WAIT;
 		zbookmark_phys_t zb;
+		enum zio_flag zio_flags = ZIO_FLAG_CANFAIL;
 		SET_BOOKMARK(&zb, ds ? ds->ds_object : DMU_META_OBJSET,
 		    ZB_ROOT_OBJECT, ZB_ROOT_LEVEL, ZB_ROOT_BLKID);
 
 		if (DMU_OS_IS_L2CACHEABLE(os))
 			aflags |= ARC_FLAG_L2CACHE;
 
+		if (ds != NULL && ds->ds_dir->dd_crypto_obj != 0 &&
+		    ds->ds_key_mappings == 0) {
+			ASSERT3U(BP_GET_COMPRESS(bp), ==, ZIO_COMPRESS_OFF);
+			ASSERT(BP_IS_AUTHENTICATED(bp));
+			zio_flags |= ZIO_FLAG_RAW;
+		}
+
 		dprintf_bp(os->os_rootbp, "reading %s", "");
 		err = arc_read(NULL, spa, os->os_rootbp,
 		    arc_getbuf_func, &os->os_phys_buf,
-		    ZIO_PRIORITY_SYNC_READ, ZIO_FLAG_CANFAIL, &aflags, &zb);
+		    ZIO_PRIORITY_SYNC_READ, zio_flags, &aflags, &zb);
 		if (err != 0) {
 			kmem_free(os, sizeof (objset_t));
 			/* convert checksum errors into IO errors */
@@ -452,6 +467,7 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 			needlock = B_TRUE;
 			dsl_pool_config_enter(dmu_objset_pool(os), FTAG);
 		}
+
 		err = dsl_prop_register(ds,
 		    zfs_prop_to_name(ZFS_PROP_PRIMARYCACHE),
 		    primary_cache_changed_cb, os);
@@ -606,16 +622,18 @@ dmu_objset_from_ds(dsl_dataset_t *ds, objset_t **osp)
  * can be held at a time.
  */
 int
-dmu_objset_hold(const char *name, void *tag, objset_t **osp)
+dmu_objset_hold_flags(const char *name, boolean_t decrypt, void *tag,
+    objset_t **osp)
 {
 	dsl_pool_t *dp;
 	dsl_dataset_t *ds;
 	int err;
+	ds_hold_flags_t flags = (decrypt) ? DS_HOLD_FLAG_DECRYPT : 0;
 
 	err = dsl_pool_hold(name, tag, &dp);
 	if (err != 0)
 		return (err);
-	err = dsl_dataset_hold(dp, name, tag, &ds);
+	err = dsl_dataset_hold_flags(dp, name, flags, tag, &ds);
 	if (err != 0) {
 		dsl_pool_rele(dp, tag);
 		return (err);
@@ -630,9 +648,15 @@ dmu_objset_hold(const char *name, void *tag, objset_t **osp)
 	return (err);
 }
 
+int
+dmu_objset_hold(const char *name, void *tag, objset_t **osp)
+{
+	return (dmu_objset_hold_flags(name, B_FALSE, tag, osp));
+}
+
 static int
 dmu_objset_own_impl(dsl_dataset_t *ds, dmu_objset_type_t type,
-    boolean_t readonly, void *tag, objset_t **osp)
+    boolean_t readonly, boolean_t decrypt, void *tag, objset_t **osp)
 {
 	int err;
 
@@ -644,6 +668,17 @@ dmu_objset_own_impl(dsl_dataset_t *ds, dmu_objset_type_t type,
 	} else if (!readonly && dsl_dataset_is_snapshot(ds)) {
 		return (SET_ERROR(EROFS));
 	}
+
+	/* if we are decrypting, we can now check MACs in os->os_phys_buf */
+	if (decrypt && arc_is_unauthenticated((*osp)->os_phys_buf)) {
+		err = arc_untransform((*osp)->os_phys_buf, (*osp)->os_spa,
+		    ds->ds_object, B_FALSE);
+		if (err != 0)
+			return (err);
+
+		ASSERT0(arc_is_unauthenticated((*osp)->os_phys_buf));
+	}
+
 	return (0);
 }
 
@@ -654,12 +689,12 @@ dmu_objset_own_impl(dsl_dataset_t *ds, dmu_objset_type_t type,
  */
 int
 dmu_objset_own(const char *name, dmu_objset_type_t type,
-    boolean_t readonly, boolean_t key_required, void *tag, objset_t **osp)
+    boolean_t readonly, boolean_t decrypt, void *tag, objset_t **osp)
 {
 	dsl_pool_t *dp;
 	dsl_dataset_t *ds;
 	int err;
-	int flags = (key_required) ? DS_HOLD_FLAG_DECRYPT : 0;
+	ds_hold_flags_t flags = (decrypt) ? DS_HOLD_FLAG_DECRYPT : 0;
 
 	err = dsl_pool_hold(name, FTAG, &dp);
 	if (err != 0)
@@ -669,7 +704,7 @@ dmu_objset_own(const char *name, dmu_objset_type_t type,
 		dsl_pool_rele(dp, FTAG);
 		return (err);
 	}
-	err = dmu_objset_own_impl(ds, type, readonly, tag, osp);
+	err = dmu_objset_own_impl(ds, type, readonly, decrypt, tag, osp);
 	if (err != 0) {
 		dsl_dataset_disown(ds, flags, tag);
 		dsl_pool_rele(dp, FTAG);
@@ -678,7 +713,8 @@ dmu_objset_own(const char *name, dmu_objset_type_t type,
 
 	dsl_pool_rele(dp, FTAG);
 
-	if (dmu_objset_userobjspace_upgradable(*osp))
+	if (dmu_objset_userobjspace_upgradable(*osp) &&
+	    (!(*osp)->os_encrypted || dmu_objset_key_mapped(*osp)))
 		dmu_objset_userobjspace_upgrade(*osp);
 
 	return (0);
@@ -686,17 +722,17 @@ dmu_objset_own(const char *name, dmu_objset_type_t type,
 
 int
 dmu_objset_own_obj(dsl_pool_t *dp, uint64_t obj, dmu_objset_type_t type,
-    boolean_t readonly, boolean_t key_required, void *tag, objset_t **osp)
+    boolean_t readonly, boolean_t decrypt, void *tag, objset_t **osp)
 {
 	dsl_dataset_t *ds;
 	int err;
-	int flags = (key_required) ? DS_HOLD_FLAG_DECRYPT: 0;
+	ds_hold_flags_t flags = (decrypt) ? DS_HOLD_FLAG_DECRYPT : 0;
 
 	err = dsl_dataset_own_obj(dp, obj, flags, tag, &ds);
 	if (err != 0)
 		return (err);
 
-	err = dmu_objset_own_impl(ds, type, readonly, tag, osp);
+	err = dmu_objset_own_impl(ds, type, readonly, decrypt, tag, osp);
 	if (err != 0) {
 		dsl_dataset_disown(ds, flags, tag);
 		return (err);
@@ -706,11 +742,19 @@ dmu_objset_own_obj(dsl_pool_t *dp, uint64_t obj, dmu_objset_type_t type,
 }
 
 void
+dmu_objset_rele_flags(objset_t *os, boolean_t decrypt, void *tag)
+{
+	ds_hold_flags_t flags = (decrypt) ? DS_HOLD_FLAG_DECRYPT : 0;
+
+	dsl_pool_t *dp = dmu_objset_pool(os);
+	dsl_dataset_rele_flags(os->os_dsl_dataset, flags, tag);
+	dsl_pool_rele(dp, tag);
+}
+
+void
 dmu_objset_rele(objset_t *os, void *tag)
 {
-	dsl_pool_t *dp = dmu_objset_pool(os);
-	dsl_dataset_rele(os->os_dsl_dataset, tag);
-	dsl_pool_rele(dp, tag);
+	dmu_objset_rele_flags(os, B_FALSE, tag);
 }
 
 /*
@@ -725,7 +769,7 @@ dmu_objset_rele(objset_t *os, void *tag)
  * same name so that it can be partially torn down and reconstructed.
  */
 void
-dmu_objset_refresh_ownership(objset_t *os, boolean_t key_needed, void *tag)
+dmu_objset_refresh_ownership(objset_t *os, boolean_t decrypt, void *tag)
 {
 	dsl_pool_t *dp;
 	dsl_dataset_t *ds, *newds;
@@ -739,22 +783,22 @@ dmu_objset_refresh_ownership(objset_t *os, boolean_t key_needed, void *tag)
 	dsl_dataset_name(ds, name);
 	dp = dmu_objset_pool(os);
 	dsl_pool_config_enter(dp, FTAG);
-	dmu_objset_disown(os, key_needed, tag);
+	dmu_objset_disown(os, decrypt, tag);
 	VERIFY0(dsl_dataset_own(dp, name,
-	    (key_needed) ? DS_HOLD_FLAG_DECRYPT : 0, tag, &newds));
+	    (decrypt) ? DS_HOLD_FLAG_DECRYPT : 0, tag, &newds));
 	VERIFY3P(newds, ==, os->os_dsl_dataset);
 	dsl_pool_config_exit(dp, FTAG);
 }
 
 void
-dmu_objset_disown(objset_t *os, boolean_t key_needed, void *tag)
+dmu_objset_disown(objset_t *os, boolean_t decrypt, void *tag)
 {
 	/*
 	 * Stop upgrading thread
 	 */
 	dmu_objset_upgrade_stop(os);
 	dsl_dataset_disown(os->os_dsl_dataset,
-	    (key_needed) ? DS_HOLD_FLAG_DECRYPT : 0, tag);
+	    (decrypt) ? DS_HOLD_FLAG_DECRYPT : 0, tag);
 }
 
 void
@@ -885,15 +929,19 @@ dmu_objset_snap_cmtime(objset_t *os)
 	return (dsl_dir_snap_cmtime(os->os_dsl_dataset->ds_dir));
 }
 
-/* called from dsl for meta-objset */
 objset_t *
-dmu_objset_create_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
-    dmu_objset_type_t type, dmu_tx_t *tx)
+dmu_objset_create_impl_dnstats(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
+    dmu_objset_type_t type, int levels, int blksz, int ibs, dmu_tx_t *tx)
 {
 	objset_t *os;
 	dnode_t *mdn;
 
 	ASSERT(dmu_tx_is_syncing(tx));
+
+	if (blksz == 0)
+		blksz = DNODE_BLOCK_SIZE;
+	if (blksz == 0)
+		ibs = DN_MAX_INDBLKSHIFT;
 
 	if (ds != NULL)
 		VERIFY0(dmu_objset_from_ds(ds, &os));
@@ -902,8 +950,8 @@ dmu_objset_create_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 
 	mdn = DMU_META_DNODE(os);
 
-	dnode_allocate(mdn, DMU_OT_DNODE, DNODE_BLOCK_SIZE, DN_MAX_INDBLKSHIFT,
-	    DMU_OT_NONE, 0, DNODE_MIN_SLOTS, tx);
+	dnode_allocate(mdn, DMU_OT_DNODE, blksz, ibs, DMU_OT_NONE, 0,
+	    DNODE_MIN_SLOTS, tx);
 
 	/*
 	 * We don't want to have to increase the meta-dnode's nlevels
@@ -917,22 +965,25 @@ dmu_objset_create_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	 * to convergence, so minimizing its dn_nlevels matters.
 	 */
 	if (ds != NULL) {
-		int levels = 1;
+		if (levels == 0) {
+			levels = 1;
 
-		/*
-		 * Determine the number of levels necessary for the meta-dnode
-		 * to contain DN_MAX_OBJECT dnodes.  Note that in order to
-		 * ensure that we do not overflow 64 bits, there has to be
-		 * a nlevels that gives us a number of blocks > DN_MAX_OBJECT
-		 * but < 2^64.  Therefore,
-		 * (mdn->dn_indblkshift - SPA_BLKPTRSHIFT) (10) must be
-		 * less than (64 - log2(DN_MAX_OBJECT)) (16).
-		 */
-		while ((uint64_t)mdn->dn_nblkptr <<
-		    (mdn->dn_datablkshift - DNODE_SHIFT +
-		    (levels - 1) * (mdn->dn_indblkshift - SPA_BLKPTRSHIFT)) <
-		    DN_MAX_OBJECT)
-			levels++;
+			/*
+			 * Determine the number of levels necessary for the
+			 * meta-dnode to contain DN_MAX_OBJECT dnodes.  Note
+			 * that in order to ensure that we do not overflow
+			 * 64 bits, there has to be a nlevels that gives us a
+			 * number of blocks > DN_MAX_OBJECT but < 2^64.
+			 * Therefore, (mdn->dn_indblkshift - SPA_BLKPTRSHIFT)
+			 * (10) must be less than (64 - log2(DN_MAX_OBJECT))
+			 * (16).
+			 */
+			while ((uint64_t)mdn->dn_nblkptr <<
+			    (mdn->dn_datablkshift - DNODE_SHIFT + (levels - 1) *
+			    (mdn->dn_indblkshift - SPA_BLKPTRSHIFT)) <
+			    DN_MAX_OBJECT)
+				levels++;
+		}
 
 		mdn->dn_next_nlevels[tx->tx_txg & TXG_MASK] =
 		    mdn->dn_nlevels = levels;
@@ -944,9 +995,8 @@ dmu_objset_create_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	os->os_phys->os_type = type;
 
 	/* enable user accounting if it is enabled and this is not a raw recv */
-	if (dmu_objset_userused_enabled(os) && (!os->os_encrypted ||
-	    spa_keystore_lookup_key(os->os_spa, dmu_objset_id(os),
-	    NULL, NULL) == 0)) {
+	if (dmu_objset_userused_enabled(os) &&
+	    (!os->os_encrypted || dmu_objset_key_mapped(os))) {
 		os->os_phys->os_flags |= OBJSET_FLAG_USERACCOUNTING_COMPLETE;
 		if (dmu_objset_userobjused_enabled(os)) {
 			ds->ds_feature_activation_needed[
@@ -960,6 +1010,14 @@ dmu_objset_create_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	dsl_dataset_dirty(ds, tx);
 
 	return (os);
+}
+
+/* called from dsl for meta-objset */
+objset_t *
+dmu_objset_create_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
+    dmu_objset_type_t type, dmu_tx_t *tx)
+{
+	return (dmu_objset_create_impl_dnstats(spa, ds, bp, type, 0, 0, 0, tx));
 }
 
 typedef struct dmu_objset_create_arg {
@@ -997,7 +1055,7 @@ dmu_objset_create_check(void *arg, dmu_tx_t *tx)
 		return (SET_ERROR(EEXIST));
 	}
 
-	error = dmu_objset_create_crypt_check(pdd, NULL, doca->doca_dcp);
+	error = dmu_objset_create_crypt_check(pdd, doca->doca_dcp);
 	if (error != 0) {
 		dsl_dir_rele(pdd, FTAG);
 		return (error);
@@ -1051,20 +1109,32 @@ dmu_objset_create_sync(void *arg, dmu_tx_t *tx)
 	 * dsl_pool_sync().
 	 */
 	if (os->os_encrypted) {
+		dsl_dataset_t *tmpds = NULL;
+		boolean_t need_sync_done = B_FALSE;
+
 		rzio = zio_root(dp->dp_spa, NULL, NULL, ZIO_FLAG_MUSTSUCCEED);
-		dsl_dataset_sync(ds, rzio, tx);
+		tmpds = txg_list_remove(&dp->dp_dirty_datasets, tx->tx_txg);
+		if (tmpds != NULL) {
+			ASSERT3P(ds, ==, tmpds);
+			dsl_dataset_sync(ds, rzio, tx);
+			need_sync_done = B_TRUE;
+		}
 		VERIFY0(zio_wait(rzio));
 
 		dmu_objset_do_userquota_updates(os, tx);
 		taskq_wait(dp->dp_sync_taskq);
 
 		rzio = zio_root(dp->dp_spa, NULL, NULL, ZIO_FLAG_MUSTSUCCEED);
-		dsl_dataset_sync(ds, rzio, tx);
+		tmpds = txg_list_remove(&dp->dp_dirty_datasets, tx->tx_txg);
+		if (tmpds != NULL) {
+			ASSERT3P(ds, ==, tmpds);
+			dmu_buf_rele(ds->ds_dbuf, ds);
+			dsl_dataset_sync(ds, rzio, tx);
+		}
 		VERIFY0(zio_wait(rzio));
 
-		/* dsl_dataset_sync_done will drop this reference. */
-		dmu_buf_add_ref(ds->ds_dbuf, ds);
-		dsl_dataset_sync_done(ds, tx);
+		if (need_sync_done)
+			dsl_dataset_sync_done(ds, tx);
 	}
 
 	spa_history_log_internal_ds(ds, "create", tx, "");
@@ -1079,6 +1149,7 @@ dmu_objset_create(const char *name, dmu_objset_type_t type, uint64_t flags,
     dsl_crypto_params_t *dcp, dmu_objset_create_sync_func_t func, void *arg)
 {
 	dmu_objset_create_arg_t doca;
+	dsl_crypto_params_t tmp_dcp = { 0 };
 
 	doca.doca_name = name;
 	doca.doca_cred = CRED();
@@ -1086,7 +1157,16 @@ dmu_objset_create(const char *name, dmu_objset_type_t type, uint64_t flags,
 	doca.doca_userfunc = func;
 	doca.doca_userarg = arg;
 	doca.doca_type = type;
-	doca.doca_dcp = dcp;
+
+	/*
+	 * Some callers (mostly for testing) do not provide a dcp on their
+	 * own but various code inside the sync task will require it to be
+	 * allocated. Rather than adding NULL checks throughout this code
+	 * or adding dummy dcp's to all of the callers we simply create a
+	 * dummy one here and use that. This zero dcp will have the same
+	 * effect as asking for inheritence of all encryption params.
+	 */
+	doca.doca_dcp = (dcp != NULL) ? dcp : &tmp_dcp;
 
 	return (dsl_sync_task(name,
 	    dmu_objset_create_check, dmu_objset_create_sync, &doca,
@@ -1097,7 +1177,6 @@ typedef struct dmu_objset_clone_arg {
 	const char *doca_clone;
 	const char *doca_origin;
 	cred_t *doca_cred;
-	dsl_crypto_params_t *doca_dcp;
 } dmu_objset_clone_arg_t;
 
 /*ARGSUSED*/
@@ -1145,8 +1224,7 @@ dmu_objset_clone_check(void *arg, dmu_tx_t *tx)
 		return (SET_ERROR(EINVAL));
 	}
 
-	error = dmu_objset_create_crypt_check(pdd, origin->ds_dir,
-	    doca->doca_dcp);
+	error = dmu_objset_clone_crypt_check(pdd, origin->ds_dir);
 	if (error != 0) {
 		dsl_dataset_rele(origin, FTAG);
 		dsl_dir_rele(pdd, FTAG);
@@ -1174,7 +1252,7 @@ dmu_objset_clone_sync(void *arg, dmu_tx_t *tx)
 	VERIFY0(dsl_dataset_hold(dp, doca->doca_origin, FTAG, &origin));
 
 	obj = dsl_dataset_create_sync(pdd, tail, origin, 0,
-	    doca->doca_cred, doca->doca_dcp, tx);
+	    doca->doca_cred, NULL, tx);
 
 	VERIFY0(dsl_dataset_hold_obj(pdd->dd_pool, obj, FTAG, &ds));
 	dsl_dataset_name(origin, namebuf);
@@ -1187,15 +1265,13 @@ dmu_objset_clone_sync(void *arg, dmu_tx_t *tx)
 }
 
 int
-dmu_objset_clone(const char *clone, const char *origin,
-    dsl_crypto_params_t *dcp)
+dmu_objset_clone(const char *clone, const char *origin)
 {
 	dmu_objset_clone_arg_t doca;
 
 	doca.doca_clone = clone;
 	doca.doca_origin = origin;
 	doca.doca_cred = CRED();
-	doca.doca_dcp = dcp;
 
 	return (dsl_sync_task(clone,
 	    dmu_objset_clone_check, dmu_objset_clone_sync, &doca,
@@ -1271,11 +1347,9 @@ dmu_objset_upgrade_stop(objset_t *os)
 }
 
 static void
-dmu_objset_sync_dnodes(objset_t *os, multilist_sublist_t *list, dmu_tx_t *tx)
+dmu_objset_sync_dnodes(multilist_sublist_t *list, dmu_tx_t *tx)
 {
 	dnode_t *dn;
-	boolean_t raw = (os->os_encrypted && spa_keystore_lookup_key(os->os_spa,
-	    dmu_objset_id(os), NULL, NULL) != 0);
 
 	while ((dn = multilist_sublist_head(list)) != NULL) {
 		ASSERT(dn->dn_object != DMU_META_DNODE_OBJECT);
@@ -1291,7 +1365,7 @@ dmu_objset_sync_dnodes(objset_t *os, multilist_sublist_t *list, dmu_tx_t *tx)
 		multilist_sublist_remove(list, dn);
 
 		multilist_t *newlist = dn->dn_objset->os_synced_dnodes;
-		if (newlist != NULL && !raw) {
+		if (newlist != NULL) {
 			(void) dnode_add_ref(dn, newlist);
 			multilist_insert(newlist, dn);
 		}
@@ -1312,7 +1386,6 @@ dmu_objset_write_ready(zio_t *zio, arc_buf_t *abuf, void *arg)
 	uint64_t fill = 0;
 
 	ASSERT(!BP_IS_EMBEDDED(bp));
-	ASSERT(!BP_IS_ENCRYPTED(bp));
 	ASSERT3U(BP_GET_TYPE(bp), ==, DMU_OT_OBJSET);
 	ASSERT0(BP_GET_LEVEL(bp));
 
@@ -1355,7 +1428,6 @@ dmu_objset_write_done(zio_t *zio, arc_buf_t *abuf, void *arg)
 }
 
 typedef struct sync_dnodes_arg {
-	objset_t *sda_os;
 	multilist_t *sda_list;
 	int sda_sublist_idx;
 	multilist_t *sda_newlist;
@@ -1370,7 +1442,7 @@ sync_dnodes_task(void *arg)
 	multilist_sublist_t *ms =
 	    multilist_sublist_lock(sda->sda_list, sda->sda_sublist_idx);
 
-	dmu_objset_sync_dnodes(sda->sda_os, ms, sda->sda_tx);
+	dmu_objset_sync_dnodes(ms, sda->sda_tx);
 
 	multilist_sublist_unlock(ms);
 
@@ -1416,6 +1488,18 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 
 	dmu_write_policy(os, NULL, 0, 0, &zp);
 
+	/*
+	 * If we are either claiming the ZIL or doing a raw receive write out
+	 * the os_phys_buf raw. Neither of these actions will effect the MAC
+	 * at this point.
+	 */
+	if (arc_is_unauthenticated(os->os_phys_buf) || os->os_need_raw) {
+		os->os_need_raw = B_FALSE;
+		arc_convert_to_raw(os->os_phys_buf,
+		    os->os_dsl_dataset->ds_object, ZFS_HOST_BYTEORDER,
+		    DMU_OT_OBJSET, NULL, NULL, NULL);
+	}
+
 	zio = arc_write(pio, os->os_spa, tx->tx_txg,
 	    blkptr_copy, os->os_phys_buf, DMU_OS_IS_L2CACHEABLE(os),
 	    &zp, dmu_objset_write_ready, NULL, NULL, dmu_objset_write_done,
@@ -1439,7 +1523,8 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 
 	txgoff = tx->tx_txg & TXG_MASK;
 
-	if (dmu_objset_userused_enabled(os)) {
+	if (dmu_objset_userused_enabled(os) &&
+	    (!os->os_encrypted || dmu_objset_key_mapped(os))) {
 		/*
 		 * We must create the list here because it uses the
 		 * dn_dirty_link[] of this txg.  But it may already
@@ -1459,7 +1544,6 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 	for (int i = 0;
 	    i < multilist_get_num_sublists(os->os_dirty_dnodes[txgoff]); i++) {
 		sync_dnodes_arg_t *sda = kmem_alloc(sizeof (*sda), KM_SLEEP);
-		sda->sda_os = os;
 		sda->sda_list = os->os_dirty_dnodes[txgoff];
 		sda->sda_sublist_idx = i;
 		sda->sda_tx = tx;
@@ -1720,8 +1804,8 @@ dmu_objset_do_userquota_updates(objset_t *os, dmu_tx_t *tx)
 	if (!dmu_objset_userused_enabled(os))
 		return;
 
-	if (os->os_encrypted && spa_keystore_lookup_key(os->os_spa,
-	    dmu_objset_id(os), NULL, NULL) != 0)
+	/* if this is a raw receive just return and handle accounting later */
+	if (os->os_encrypted && !dmu_objset_key_mapped(os))
 		return;
 
 	/* Allocate the user/groupused objects if necessary. */
@@ -1811,8 +1895,7 @@ dmu_objset_userquota_get_ids(dnode_t *dn, boolean_t before, dmu_tx_t *tx)
 	 * as part of the send anyway so we can simply rely on that without
 	 * redoing the work.
 	 */
-	if (os->os_encrypted && spa_keystore_lookup_key(os->os_spa,
-	    dmu_objset_id(os), NULL, NULL) != 0)
+	if (os->os_encrypted && !dmu_objset_key_mapped(os))
 		return;
 
 	if (before && (flags & (DN_ID_CHKED_BONUS|DN_ID_OLD_EXIST|
@@ -2588,12 +2671,15 @@ dmu_objset_willuse_space(objset_t *os, int64_t space, dmu_tx_t *tx)
 #if defined(_KERNEL) && defined(HAVE_SPL)
 EXPORT_SYMBOL(dmu_objset_zil);
 EXPORT_SYMBOL(dmu_objset_pool);
+EXPORT_SYMBOL(dmu_objset_key_mapped);
 EXPORT_SYMBOL(dmu_objset_ds);
 EXPORT_SYMBOL(dmu_objset_type);
 EXPORT_SYMBOL(dmu_objset_name);
 EXPORT_SYMBOL(dmu_objset_hold);
+EXPORT_SYMBOL(dmu_objset_hold_flags);
 EXPORT_SYMBOL(dmu_objset_own);
 EXPORT_SYMBOL(dmu_objset_rele);
+EXPORT_SYMBOL(dmu_objset_rele_flags);
 EXPORT_SYMBOL(dmu_objset_disown);
 EXPORT_SYMBOL(dmu_objset_from_ds);
 EXPORT_SYMBOL(dmu_objset_create);
@@ -2611,6 +2697,7 @@ EXPORT_SYMBOL(dmu_objset_dnodesize);
 
 EXPORT_SYMBOL(dmu_objset_sync);
 EXPORT_SYMBOL(dmu_objset_is_dirty);
+EXPORT_SYMBOL(dmu_objset_create_impl_dnstats);
 EXPORT_SYMBOL(dmu_objset_create_impl);
 EXPORT_SYMBOL(dmu_objset_open_impl);
 EXPORT_SYMBOL(dmu_objset_evict);

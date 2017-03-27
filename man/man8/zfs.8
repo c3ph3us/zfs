@@ -510,6 +510,20 @@ This property is \fBon\fR if the snapshot has been marked for deferred destructi
 .sp
 .ne 2
 .na
+\fB\fBencryptionroot\fR\fR
+.ad
+.sp .6
+.RS 4n
+For encrypted datasets, indicates where the dataset is currently inheriting its
+encryption key from. Loading or unloading a key for the \fBencryptionroot\fR
+will implicitly load / unload the key for any inheriting datasets (see
+\fBzfs load-key\fR and \fBzfs unload-key\fR). Clones will always share an
+encryption key with their origin. See the \fBEncryption\fR section for details.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBfilesystem_count\fR
 .ad
 .sp .6
@@ -1091,22 +1105,16 @@ be changed after dataset creation, the keyformat can be with
 .RS 4n
 Controls where the user's encryption key will be loaded from by default for
 commands such as \fBzfs load-key\fR and \fBzfs mount -l\fR. This property is
-only set when the dataset is encrypted.
-.sp
-If \fBkeylocation\fR is set locally, the dataset is an encryption root.
-Encryption roots share their keys with all datasets that inherit this property.
-This means that when a key is loaded for the encryption root, the keys for all
-children that inherit the \fBkeylocation\fR property are automatically loaded
-as well.
+only set when the dataset is encrypted. Only set for encryption roots.
 .sp
 Even though the encryption suite cannot be changed after dataset creation, the
-keylocation can be with \fBzfs change-key\fR. If the dataset is an encryption
-root this property may also be changed with \fBzfs set\fR. If \fBprompt\fR is
-selected ZFS will ask for the key at the command prompt when it is required to
-access the encrypted data (see \fBzfs load-key\fR). This setting will also
-allow the key to be passed in via STDIN, but users should be careful not to
-place keys which should be kept secret on the command line. If a file URI is
-selected, the key will be loaded from the specified absolute file path.
+keylocation can be with either \fBzfs set\fR or \fBzfs change-key\fR. If
+\fBprompt\fR is selected ZFS will ask for the key at the command prompt when
+it is required to access the encrypted data (see \fBzfs load-key\fR). This
+setting will also allow the key to be passed in via STDIN, but users should be
+careful not to place keys which should be kept secret on the command line. If
+a file URI is selected, the key will be loaded from the specified absolute file
+path.
 .RE
 
 .sp
@@ -1788,6 +1796,19 @@ internally by the \fBZFS\fR kernel module and changing the user's key does not
 require re-encrypting the entire dataset. Datasets can be scrubbed, resilvered,
 renamed, and deleted without the encryption keys being loaded (see the
 \fBkeylocation\fR property and \fBzfs load-key\fR subcommand for more info).
+.sp
+.LP
+Creating an encrypted dataset requires specifying the \fBencryption\fR and
+\fBkeyformat\fR at creationg time, along with an optional \fBkeylocation\fR
+and \fBpbkdf2iters\fR. After entering an encryption key, \fBZFS\fR the created
+dataset will become an encryption root. Any descendant datasets will inherit
+their encryption key from the encryption root, meaning that loading, unloading,
+or changing the key for the encryption root will implicitly do the same for
+all inheriting datasets. If this inheritence is not desired, simply supply a new
+\fBencryption\fR and \fbkeyformat\fR when creating the child dataset or use
+\fBzfs change-key\fR to break the relationship. The one exception is that clones
+will always use their origin's encryption key. Encryption root inheritence
+can be tracked via the read-only \fBencryptionroot\fR property.
 .sp
 .LP
 Encryption changes the behavior of a few \fBZFS\fR operations. Encryption is
@@ -3017,7 +3038,7 @@ decompressed before sending so it can be split into smaller block sizes.
 .sp
 .ne 2
 .na
-\fB\fB-r\fR\fR
+\fB\fB-r\fR\fR, \fB--raw\fR\fR
 .ad
 .sp .6
 .RS 4n
@@ -3028,7 +3049,10 @@ not have the encryption keys to read the protected data or alter it without
 being detected. Upon being received, the dataset will have the same encryption
 keys as it did on the send side, although the \fBkeylocation\fR property will
 be defaulted to \fBprompt\fR. For unencrypted datasets, this flag will be
-equivalent to \fB-c\fR.
+equivalent to \fB-c\fR. Note that if you do not use this flag for sending
+encrypted datasets, data will be sent unencrypted and may be re-encrypted with
+a different encryption key on the receiving system, which will disable the
+ability to do a raw send to that system for incrementals.
 .RE
 
 .sp
@@ -3144,7 +3168,7 @@ decompressed before sending so it can be split into smaller block sizes.
 .sp
 .ne 2
 .na
-\fB\fB-r\fR\fR
+\fB\fB-r\fR\fR, \fB--raw\fR\fR
 .ad
 .sp .6
 .RS 4n
@@ -3155,7 +3179,10 @@ not have the encryption keys to read the protected data or alter it without
 being detected. Upon being received, the dataset will have the same encryption
 keys as it did on the send side, although the \fBkeylocation\fR property will
 be defaulted to \fBprompt\fR. For unencrypted datasets, this flag will be
-equivalent to \fB-c\fR.
+equivalent to \fB-c\fR. Note that if you do not use this flag for sending
+encrypted datasets, data will be sent unencrypted and may be re-encrypted with
+a different encryption key on the receiving system, which will disable the
+ability to do a raw send to that system for incrementals.
 .RE
 
 .sp

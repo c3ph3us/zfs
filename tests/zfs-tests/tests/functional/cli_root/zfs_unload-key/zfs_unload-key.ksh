@@ -42,27 +42,27 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
+		log_must zfs destroy $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
 log_assert "'zfs unload-key' should unload the key for an unmounted" \
 	"encrypted dataset"
 
-log_mustnot $ZFS unload-key $TESTPOOL/$TESTFS
+log_mustnot zfs unload-key $TESTPOOL/$TESTFS
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS
-log_mustnot $ZFS unload-key $TESTPOOL/$TESTFS
+log_must zfs unmount $TESTPOOL/$TESTFS
+log_mustnot zfs unload-key $TESTPOOL/$TESTFS
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS1"
-log_mustnot $ZFS unload-key $TESTPOOL/$TESTFS1
+log_mustnot zfs unload-key $TESTPOOL/$TESTFS1
 log_must key_available $TESTPOOL/$TESTFS1
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
 log_must key_unavailable $TESTPOOL/$TESTFS1
 
-log_mustnot $ZFS unload-key $TESTPOOL/$TESTFS1
+log_mustnot zfs unload-key $TESTPOOL/$TESTFS1
 
 log_pass "'zfs unload-key' unloads the key for an unmounted encrypted dataset"

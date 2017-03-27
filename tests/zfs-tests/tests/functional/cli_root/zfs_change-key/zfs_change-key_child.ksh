@@ -42,7 +42,7 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy -r $TESTPOOL/$TESTFS1
+		log_must zfs destroy -r $TESTPOOL/$TESTFS1
 }
 
 log_onexit cleanup
@@ -50,37 +50,37 @@ log_onexit cleanup
 log_assert "'zfs change-key' should promote an encrypted child to an" \
 	"encryption root"
 
-log_must eval "$ECHO $PASSPHRASE1 | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE1 | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS1"
-log_must $ZFS create $TESTPOOL/$TESTFS1/child
+log_must zfs create $TESTPOOL/$TESTFS1/child
 
-log_mustnot eval "$ECHO $PASSPHRASE2 | $ZFS change-key" \
+log_mustnot eval "echo $PASSPHRASE2 | zfs change-key" \
 	"$TESTPOOL/$TESTFS1/child"
 
-log_mustnot eval "$ECHO $PASSPHRASE2 | $ZFS change-key -o keylocation=prompt" \
+log_mustnot eval "echo $PASSPHRASE2 | zfs change-key -o keylocation=prompt" \
 	"$TESTPOOL/$TESTFS1/child"
 
-log_must eval "$ECHO $PASSPHRASE2 | $ZFS change-key -o keyformat=passphrase" \
+log_must eval "echo $PASSPHRASE2 | zfs change-key -o keyformat=passphrase" \
 	"$TESTPOOL/$TESTFS1/child"
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1/child
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1/child
+log_must zfs unmount $TESTPOOL/$TESTFS1/child
+log_must zfs unload-key $TESTPOOL/$TESTFS1/child
 log_must key_unavailable $TESTPOOL/$TESTFS1/child
 
-log_must eval "$ECHO $PASSPHRASE2 | $ZFS load-key $TESTPOOL/$TESTFS1/child"
+log_must eval "echo $PASSPHRASE2 | zfs load-key $TESTPOOL/$TESTFS1/child"
 log_must key_available $TESTPOOL/$TESTFS1/child
 
-log_must $ZFS destroy $TESTPOOL/$TESTFS1/child
-log_must $ZFS create $TESTPOOL/$TESTFS1/child
+log_must zfs destroy $TESTPOOL/$TESTFS1/child
+log_must zfs create $TESTPOOL/$TESTFS1/child
 
-log_must eval "$ECHO $PASSPHRASE2 | $ZFS change-key -o keyformat=passphrase" \
+log_must eval "echo $PASSPHRASE2 | zfs change-key -o keyformat=passphrase" \
 	"-o keylocation=prompt $TESTPOOL/$TESTFS1/child"
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1/child
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1/child
+log_must zfs unmount $TESTPOOL/$TESTFS1/child
+log_must zfs unload-key $TESTPOOL/$TESTFS1/child
 log_must key_unavailable $TESTPOOL/$TESTFS1/child
 
-log_must eval "$ECHO $PASSPHRASE2 | $ZFS load-key $TESTPOOL/$TESTFS1/child"
+log_must eval "echo $PASSPHRASE2 | zfs load-key $TESTPOOL/$TESTFS1/child"
 log_must key_available $TESTPOOL/$TESTFS1/child
 
 log_pass "'zfs change-key' promotes an encrypted child to an encryption root"

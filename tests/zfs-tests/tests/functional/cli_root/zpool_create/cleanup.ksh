@@ -36,4 +36,5 @@ clean_blockfile "$TESTDIR $TESTDIR0 $TESTDIR1"
 
 cleanup_devices $DISKS
 
+pkill -9 rngd
 log_pass

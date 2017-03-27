@@ -1677,8 +1677,7 @@ zfs_setprop_error(libzfs_handle_t *hdl, zfs_prop_t prop, int err,
 	case EACCES:
 		if (prop == ZFS_PROP_KEYLOCATION) {
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-			    "Keylocation may only be set if it is set locally. "
-			    "This may be changed with 'zfs change-key.'"));
+			    "keylocation may only be set on encryption roots"));
 			(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
 		} else {
 			(void) zfs_standard_error(hdl, err, errbuf);
@@ -3755,8 +3754,6 @@ zfs_clone(zfs_handle_t *zhp, const char *target, nvlist_t *props)
 	char parent[ZFS_MAX_DATASET_NAME_LEN];
 	int ret;
 	char errbuf[1024];
-	uint8_t *wkeydata = NULL;
-	uint_t wkeylen = 0;
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
 	uint64_t zoned;
 
@@ -3789,16 +3786,13 @@ zfs_clone(zfs_handle_t *zhp, const char *target, nvlist_t *props)
 			return (-1);
 	}
 
-	if (zfs_crypto_clone(hdl, zhp, parent, props, &wkeydata,
-	    &wkeylen) != 0) {
+	if (zfs_crypto_clone_check(hdl, zhp, parent, props) != 0) {
 		nvlist_free(props);
 		return (zfs_error(hdl, EZFS_CRYPTOFAILED, errbuf));
 	}
 
-	ret = lzc_clone(target, zhp->zfs_name, props, wkeydata, wkeylen);
+	ret = lzc_clone(target, zhp->zfs_name, props);
 	nvlist_free(props);
-	if (wkeydata != NULL)
-		free(wkeydata);
 
 	if (ret != 0) {
 		switch (errno) {
@@ -3821,12 +3815,6 @@ zfs_clone(zfs_handle_t *zhp, const char *target, nvlist_t *props)
 			zfs_error_aux(zhp->zfs_hdl, dgettext(TEXT_DOMAIN,
 			    "source and target pools differ"));
 			return (zfs_error(zhp->zfs_hdl, EZFS_CROSSTARGET,
-			    errbuf));
-
-		case EACCES:
-			zfs_error_aux(zhp->zfs_hdl, dgettext(TEXT_DOMAIN,
-			    "required encryption key not loaded or provided"));
-			return (zfs_error(zhp->zfs_hdl, EZFS_CRYPTOFAILED,
 			    errbuf));
 
 		default:

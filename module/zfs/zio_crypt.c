@@ -19,10 +19,12 @@
 
 #include <sys/zio_crypt.h>
 #include <sys/dmu.h>
+#include <sys/dmu_objset.h>
 #include <sys/dnode.h>
 #include <sys/fs/zfs.h>
 #include <sys/zio.h>
 #include <sys/zil.h>
+#include <sys/sha2.h>
 
 /*
  * This file is responsible for handling all of the details of generating
@@ -129,7 +131,7 @@ zio_crypt_info_t zio_crypt_table[ZIO_CRYPT_FUNCTIONS] = {
 };
 
 static int
-hkdf_sha256_extract(uint8_t *salt, uint_t salt_len, uint8_t *key_material,
+hkdf_sha512_extract(uint8_t *salt, uint_t salt_len, uint8_t *key_material,
     uint_t km_len, uint8_t *out_buf)
 {
 	int ret;
@@ -138,7 +140,7 @@ hkdf_sha256_extract(uint8_t *salt, uint_t salt_len, uint8_t *key_material,
 	crypto_data_t input_cd, output_cd;
 
 	/* initialize sha 256 hmac mechanism */
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA256_HMAC);
+	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
 	mech.cm_param = NULL;
 	mech.cm_param_len = 0;
 
@@ -152,13 +154,13 @@ hkdf_sha256_extract(uint8_t *salt, uint_t salt_len, uint8_t *key_material,
 	input_cd.cd_offset = 0;
 	input_cd.cd_length = km_len;
 	input_cd.cd_raw.iov_base = (char *)key_material;
-	input_cd.cd_raw.iov_len = km_len;
+	input_cd.cd_raw.iov_len = input_cd.cd_length;
 
 	output_cd.cd_format = CRYPTO_DATA_RAW;
 	output_cd.cd_offset = 0;
-	output_cd.cd_length = SHA_256_DIGEST_LEN;
+	output_cd.cd_length = SHA512_DIGEST_LEN;
 	output_cd.cd_raw.iov_base = (char *)out_buf;
-	output_cd.cd_raw.iov_len = SHA_256_DIGEST_LEN;
+	output_cd.cd_raw.iov_len = output_cd.cd_length;
 
 	ret = crypto_mac(&mech, &input_cd, &key, NULL, &output_cd, NULL);
 	if (ret != CRYPTO_SUCCESS) {
@@ -173,7 +175,7 @@ error:
 }
 
 static int
-hkdf_sha256_expand(uint8_t *extract_key, uint8_t *info, uint_t info_len,
+hkdf_sha512_expand(uint8_t *extract_key, uint8_t *info, uint_t info_len,
     uint8_t *out_buf, uint_t out_len)
 {
 	int ret;
@@ -183,20 +185,20 @@ hkdf_sha256_expand(uint8_t *extract_key, uint8_t *info, uint_t info_len,
 	crypto_data_t T_cd, info_cd, c_cd;
 	uint_t i, T_len = 0, pos = 0;
 	uint8_t c;
-	uint_t N = (out_len + SHA_256_DIGEST_LEN) / SHA_256_DIGEST_LEN;
-	uint8_t T[SHA_256_DIGEST_LEN];
+	uint_t N = (out_len + SHA512_DIGEST_LEN) / SHA512_DIGEST_LEN;
+	uint8_t T[SHA512_DIGEST_LEN];
 
 	if (N > 255)
 		return (SET_ERROR(EINVAL));
 
 	/* initialize sha 256 hmac mechanism */
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA256_HMAC);
+	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
 	mech.cm_param = NULL;
 	mech.cm_param_len = 0;
 
 	/* initialize the salt as a crypto key */
 	key.ck_format = CRYPTO_KEY_RAW;
-	key.ck_length = BYTES_TO_BITS(SHA_256_DIGEST_LEN);
+	key.ck_length = BYTES_TO_BITS(SHA512_DIGEST_LEN);
 	key.ck_data = extract_key;
 
 	/* initialize crypto data for the input and output data */
@@ -208,19 +210,19 @@ hkdf_sha256_expand(uint8_t *extract_key, uint8_t *info, uint_t info_len,
 	c_cd.cd_offset = 0;
 	c_cd.cd_length = 1;
 	c_cd.cd_raw.iov_base = (char *)&c;
-	c_cd.cd_raw.iov_len = 1;
+	c_cd.cd_raw.iov_len = c_cd.cd_length;
 
 	info_cd.cd_format = CRYPTO_DATA_RAW;
 	info_cd.cd_offset = 0;
 	info_cd.cd_length = info_len;
 	info_cd.cd_raw.iov_base = (char *)info;
-	info_cd.cd_raw.iov_len = info_len;
+	info_cd.cd_raw.iov_len = info_cd.cd_length;
 
 	for (i = 1; i <= N; i++) {
 		c = i;
 
 		T_cd.cd_length = T_len;
-		T_cd.cd_raw.iov_len = T_len;
+		T_cd.cd_raw.iov_len = T_cd.cd_length;
 
 		ret = crypto_mac_init(&mech, &key, NULL, &ctx, NULL);
 		if (ret != CRYPTO_SUCCESS) {
@@ -246,9 +248,9 @@ hkdf_sha256_expand(uint8_t *extract_key, uint8_t *info, uint_t info_len,
 			goto error;
 		}
 
-		T_len = SHA_256_DIGEST_LEN;
+		T_len = SHA512_DIGEST_LEN;
 		T_cd.cd_length = T_len;
-		T_cd.cd_raw.iov_len = T_len;
+		T_cd.cd_raw.iov_len = T_cd.cd_length;
 
 		ret = crypto_mac_final(ctx, &T_cd, NULL);
 		if (ret != CRYPTO_SUCCESS) {
@@ -257,8 +259,8 @@ hkdf_sha256_expand(uint8_t *extract_key, uint8_t *info, uint_t info_len,
 		}
 
 		bcopy(T, out_buf + pos,
-		    (i != N) ? SHA_256_DIGEST_LEN : (out_len - pos));
-		pos += SHA_256_DIGEST_LEN;
+		    (i != N) ? SHA512_DIGEST_LEN : (out_len - pos));
+		pos += SHA512_DIGEST_LEN;
 	}
 
 	return (0);
@@ -275,19 +277,19 @@ error:
  * info parameter is called the "salt" everywhere else in the code.
  */
 static int
-hkdf_sha256(uint8_t *key_material, uint_t km_len, uint8_t *salt,
+hkdf_sha512(uint8_t *key_material, uint_t km_len, uint8_t *salt,
     uint_t salt_len, uint8_t *info, uint_t info_len, uint8_t *output_key,
     uint_t out_len)
 {
 	int ret;
-	uint8_t extract_key[SHA_256_DIGEST_LEN];
+	uint8_t extract_key[SHA512_DIGEST_LEN];
 
-	ret = hkdf_sha256_extract(salt, salt_len, key_material, km_len,
+	ret = hkdf_sha512_extract(salt, salt_len, key_material, km_len,
 	    extract_key);
 	if (ret != 0)
 		goto error;
 
-	ret = hkdf_sha256_expand(extract_key, info, info_len, output_key,
+	ret = hkdf_sha512_expand(extract_key, info, info_len, output_key,
 	    out_len);
 	if (ret != 0)
 		goto error;
@@ -324,11 +326,15 @@ zio_crypt_key_init(uint64_t crypt, zio_crypt_key_t *key)
 	keydata_len = zio_crypt_table[crypt].ci_keylen;
 
 	/* fill keydata buffers and salt with random data */
+	ret = random_get_bytes((uint8_t *)&key->zk_guid, sizeof (uint64_t));
+	if (ret != 0)
+		goto error;
+
 	ret = random_get_bytes(key->zk_master_keydata, keydata_len);
 	if (ret != 0)
 		goto error;
 
-	ret = random_get_bytes(key->zk_hmac_keydata, HMAC_SHA256_KEYLEN);
+	ret = random_get_bytes(key->zk_hmac_keydata, SHA512_HMAC_KEYLEN);
 	if (ret != 0)
 		goto error;
 
@@ -337,7 +343,7 @@ zio_crypt_key_init(uint64_t crypt, zio_crypt_key_t *key)
 		goto error;
 
 	/* derive the current key from the master key */
-	ret = hkdf_sha256(key->zk_master_keydata, keydata_len, NULL, 0,
+	ret = hkdf_sha512(key->zk_master_keydata, keydata_len, NULL, 0,
 	    key->zk_salt, ZIO_DATA_SALT_LEN, key->zk_current_keydata,
 	    keydata_len);
 	if (ret != 0)
@@ -350,7 +356,7 @@ zio_crypt_key_init(uint64_t crypt, zio_crypt_key_t *key)
 
 	key->zk_hmac_key.ck_format = CRYPTO_KEY_RAW;
 	key->zk_hmac_key.ck_data = &key->zk_hmac_key;
-	key->zk_hmac_key.ck_length = BYTES_TO_BITS(HMAC_SHA256_KEYLEN);
+	key->zk_hmac_key.ck_length = BYTES_TO_BITS(SHA512_HMAC_KEYLEN);
 
 	/*
 	 * Initialize the crypto templates. It's ok if this fails because
@@ -362,7 +368,7 @@ zio_crypt_key_init(uint64_t crypt, zio_crypt_key_t *key)
 	if (ret != CRYPTO_SUCCESS)
 		key->zk_current_tmpl = NULL;
 
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA256_HMAC);
+	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
 	ret = crypto_create_ctx_template(&mech, &key->zk_hmac_key,
 	    &key->zk_hmac_tmpl, KM_SLEEP);
 	if (ret != CRYPTO_SUCCESS)
@@ -395,7 +401,7 @@ zio_crypt_key_change_salt(zio_crypt_key_t *key)
 	rw_enter(&key->zk_salt_lock, RW_WRITER);
 
 	/* derive the current key from the master key and the new salt */
-	ret = hkdf_sha256(key->zk_master_keydata, keydata_len, NULL, 0,
+	ret = hkdf_sha512(key->zk_master_keydata, keydata_len, NULL, 0,
 	    salt, ZIO_DATA_SALT_LEN, key->zk_current_keydata, keydata_len);
 	if (ret != 0)
 		goto error_unlock;
@@ -557,6 +563,7 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 	uio_t puio, cuio;
 	iovec_t plain_iovecs[2], cipher_iovecs[3];
 	uint64_t crypt = key->zk_crypt;
+	uint64_t le_guid = LE_64(key->zk_guid);
 	uint_t enc_len, keydata_len;
 
 	ASSERT3U(crypt, <, ZIO_CRYPT_FUNCTIONS);
@@ -573,16 +580,16 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 	plain_iovecs[0].iov_base = key->zk_master_keydata;
 	plain_iovecs[0].iov_len = keydata_len;
 	plain_iovecs[1].iov_base = key->zk_hmac_keydata;
-	plain_iovecs[1].iov_len = HMAC_SHA256_KEYLEN;
+	plain_iovecs[1].iov_len = SHA512_HMAC_KEYLEN;
 
 	cipher_iovecs[0].iov_base = keydata_out;
 	cipher_iovecs[0].iov_len = keydata_len;
 	cipher_iovecs[1].iov_base = hmac_keydata_out;
-	cipher_iovecs[1].iov_len = HMAC_SHA256_KEYLEN;
+	cipher_iovecs[1].iov_len = SHA512_HMAC_KEYLEN;
 	cipher_iovecs[2].iov_base = mac;
 	cipher_iovecs[2].iov_len = WRAPPING_MAC_LEN;
 
-	enc_len = zio_crypt_table[crypt].ci_keylen + HMAC_SHA256_KEYLEN;
+	enc_len = zio_crypt_table[crypt].ci_keylen + SHA512_HMAC_KEYLEN;
 	puio.uio_iov = plain_iovecs;
 	puio.uio_iovcnt = 2;
 	puio.uio_segflg = UIO_SYSSPACE;
@@ -592,7 +599,7 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 
 	/* encrypt the keys and store the resulting ciphertext and mac */
 	ret = zio_do_crypt_uio(B_TRUE, crypt, cwkey, NULL, iv, enc_len,
-	    &puio, &cuio, NULL, 0);
+	    &puio, &cuio, (uint8_t *)&le_guid, sizeof (uint64_t));
 	if (ret != 0)
 		goto error;
 
@@ -603,15 +610,16 @@ error:
 }
 
 int
-zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint8_t *keydata,
-    uint8_t *hmac_keydata, uint8_t *iv, uint8_t *mac, zio_crypt_key_t *key)
+zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t guid,
+    uint8_t *keydata, uint8_t *hmac_keydata, uint8_t *iv, uint8_t *mac,
+    zio_crypt_key_t *key)
 {
 	int ret;
 	crypto_mechanism_t mech;
 	uio_t puio, cuio;
-	iovec_t plain_iovecs[3], cipher_iovecs[3];
-	uint8_t outmac[WRAPPING_MAC_LEN];
+	iovec_t plain_iovecs[2], cipher_iovecs[3];
 	uint_t enc_len, keydata_len;
+	uint64_t le_guid = LE_64(guid);
 
 	ASSERT3U(crypt, <, ZIO_CRYPT_FUNCTIONS);
 	ASSERT3U(cwkey->ck_format, ==, CRYPTO_KEY_RAW);
@@ -622,28 +630,26 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint8_t *keydata,
 	plain_iovecs[0].iov_base = key->zk_master_keydata;
 	plain_iovecs[0].iov_len = keydata_len;
 	plain_iovecs[1].iov_base = key->zk_hmac_keydata;
-	plain_iovecs[1].iov_len = HMAC_SHA256_KEYLEN;
-	plain_iovecs[2].iov_base = outmac;
-	plain_iovecs[2].iov_len = WRAPPING_MAC_LEN;
+	plain_iovecs[1].iov_len = SHA512_HMAC_KEYLEN;
 
 	cipher_iovecs[0].iov_base = keydata;
 	cipher_iovecs[0].iov_len = keydata_len;
 	cipher_iovecs[1].iov_base = hmac_keydata;
-	cipher_iovecs[1].iov_len = HMAC_SHA256_KEYLEN;
+	cipher_iovecs[1].iov_len = SHA512_HMAC_KEYLEN;
 	cipher_iovecs[2].iov_base = mac;
 	cipher_iovecs[2].iov_len = WRAPPING_MAC_LEN;
 
-	enc_len = keydata_len + HMAC_SHA256_KEYLEN;
+	enc_len = keydata_len + SHA512_HMAC_KEYLEN;
 	puio.uio_iov = plain_iovecs;
 	puio.uio_segflg = UIO_SYSSPACE;
-	puio.uio_iovcnt = 3;
+	puio.uio_iovcnt = 2;
 	cuio.uio_iov = cipher_iovecs;
 	cuio.uio_iovcnt = 3;
 	cuio.uio_segflg = UIO_SYSSPACE;
 
 	/* decrypt the keys and store the result in the output buffers */
 	ret = zio_do_crypt_uio(B_FALSE, crypt, cwkey, NULL, iv, enc_len,
-	    &puio, &cuio, NULL, 0);
+	    &puio, &cuio, (uint8_t *)&le_guid, sizeof (uint64_t));
 	if (ret != 0)
 		goto error;
 
@@ -653,7 +659,7 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint8_t *keydata,
 		goto error;
 
 	/* derive the current key from the master key */
-	ret = hkdf_sha256(key->zk_master_keydata, keydata_len, NULL, 0,
+	ret = hkdf_sha512(key->zk_master_keydata, keydata_len, NULL, 0,
 	    key->zk_salt, ZIO_DATA_SALT_LEN, key->zk_current_keydata,
 	    keydata_len);
 	if (ret != 0)
@@ -666,7 +672,7 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint8_t *keydata,
 
 	key->zk_hmac_key.ck_format = CRYPTO_KEY_RAW;
 	key->zk_hmac_key.ck_data = key->zk_hmac_keydata;
-	key->zk_hmac_key.ck_length = BYTES_TO_BITS(HMAC_SHA256_KEYLEN);
+	key->zk_hmac_key.ck_length = BYTES_TO_BITS(SHA512_HMAC_KEYLEN);
 
 	/*
 	 * Initialize the crypto templates. It's ok if this fails because
@@ -678,13 +684,14 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint8_t *keydata,
 	if (ret != CRYPTO_SUCCESS)
 		key->zk_current_tmpl = NULL;
 
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA256_HMAC);
+	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
 	ret = crypto_create_ctx_template(&mech, &key->zk_hmac_key,
 	    &key->zk_hmac_tmpl, KM_SLEEP);
 	if (ret != CRYPTO_SUCCESS)
 		key->zk_hmac_tmpl = NULL;
 
 	key->zk_crypt = crypt;
+	key->zk_guid = guid;
 	key->zk_salt_count = 0;
 	rw_init(&key->zk_salt_lock, NULL, RW_DEFAULT, NULL);
 
@@ -713,16 +720,16 @@ error:
 }
 
 int
-zio_crypt_generate_iv_salt_dedup(zio_crypt_key_t *key, uint8_t *data,
-    uint_t datalen, uint8_t *ivbuf, uint8_t *salt)
+zio_crypt_do_hmac(zio_crypt_key_t *key, uint8_t *data, uint_t datalen,
+    uint8_t *digestbuf)
 {
 	int ret;
 	crypto_mechanism_t mech;
 	crypto_data_t in_data, digest_data;
-	uint8_t digestbuf[SHA_256_DIGEST_LEN];
+	uint8_t raw_digestbuf[SHA512_DIGEST_LEN];
 
-	/* initialize sha256-hmac mechanism and crypto data */
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA256_HMAC);
+	/* initialize sha512-hmac mechanism and crypto data */
+	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
 	mech.cm_param = NULL;
 	mech.cm_param_len = 0;
 
@@ -731,13 +738,13 @@ zio_crypt_generate_iv_salt_dedup(zio_crypt_key_t *key, uint8_t *data,
 	in_data.cd_offset = 0;
 	in_data.cd_length = datalen;
 	in_data.cd_raw.iov_base = (char *)data;
-	in_data.cd_raw.iov_len = datalen;
+	in_data.cd_raw.iov_len = in_data.cd_length;
 
 	digest_data.cd_format = CRYPTO_DATA_RAW;
 	digest_data.cd_offset = 0;
-	digest_data.cd_length = SHA_256_DIGEST_LEN;
-	digest_data.cd_raw.iov_base = (char *)digestbuf;
-	digest_data.cd_raw.iov_len = SHA_256_DIGEST_LEN;
+	digest_data.cd_length = SHA512_DIGEST_LEN;
+	digest_data.cd_raw.iov_base = (char *)raw_digestbuf;
+	digest_data.cd_raw.iov_len = digest_data.cd_length;
 
 	/* generate the hmac */
 	ret = crypto_mac(&mech, &in_data, &key->zk_hmac_key, key->zk_hmac_tmpl,
@@ -747,14 +754,30 @@ zio_crypt_generate_iv_salt_dedup(zio_crypt_key_t *key, uint8_t *data,
 		goto error;
 	}
 
-	/* truncate and copy the digest into the output buffer */
-	bcopy(digestbuf, salt, ZIO_DATA_SALT_LEN);
-	bcopy(digestbuf + ZIO_DATA_SALT_LEN, ivbuf, ZIO_DATA_IV_LEN);
+	bcopy(raw_digestbuf, digestbuf, ZIO_DATA_MAC_LEN);
 
 	return (0);
 
 error:
+	bzero(digestbuf, ZIO_DATA_MAC_LEN);
 	return (ret);
+}
+
+int
+zio_crypt_generate_iv_salt_dedup(zio_crypt_key_t *key, uint8_t *data,
+    uint_t datalen, uint8_t *ivbuf, uint8_t *salt)
+{
+	int ret;
+	uint8_t digestbuf[SHA512_DIGEST_LEN];
+
+	ret = zio_crypt_do_hmac(key, data, datalen, digestbuf);
+	if (ret != 0)
+		return (ret);
+
+	bcopy(digestbuf, salt, ZIO_DATA_SALT_LEN);
+	bcopy(digestbuf + ZIO_DATA_SALT_LEN, ivbuf, ZIO_DATA_IV_LEN);
+
+	return (0);
 }
 
 void
@@ -776,7 +799,14 @@ zio_crypt_decode_params_bp(const blkptr_t *bp, uint8_t *salt, uint8_t *iv)
 	uint64_t val64;
 	uint32_t val32;
 
-	ASSERT(BP_IS_ENCRYPTED(bp));
+	ASSERT(BP_IS_PROTECTED(bp));
+
+	/* for convenience, so callers don't need to check */
+	if (BP_IS_AUTHENTICATED(bp)) {
+		bzero(salt, ZIO_DATA_SALT_LEN);
+		bzero(iv, ZIO_DATA_IV_LEN);
+		return;
+	}
 
 	if (!BP_SHOULD_BYTESWAP(bp)) {
 		bcopy(&bp->blk_dva[2].dva_word[0], salt, sizeof (uint64_t));
@@ -799,7 +829,8 @@ zio_crypt_decode_params_bp(const blkptr_t *bp, uint8_t *salt, uint8_t *iv)
 void
 zio_crypt_encode_mac_bp(blkptr_t *bp, uint8_t *mac)
 {
-	ASSERT(BP_IS_ENCRYPTED(bp));
+	ASSERT(BP_USES_CRYPT(bp));
+	ASSERT3U(BP_GET_TYPE(bp), !=, DMU_OT_OBJSET);
 
 	bcopy(mac, &bp->blk_cksum.zc_word[2], sizeof (uint64_t));
 	bcopy(mac + sizeof (uint64_t), &bp->blk_cksum.zc_word[3],
@@ -811,7 +842,13 @@ zio_crypt_decode_mac_bp(const blkptr_t *bp, uint8_t *mac)
 {
 	uint64_t val64;
 
-	ASSERT(BP_IS_ENCRYPTED(bp));
+	ASSERT(BP_USES_CRYPT(bp) || BP_IS_HOLE(bp));
+
+	/* for convenience, so callers don't need to check */
+	if (BP_GET_TYPE(bp) == DMU_OT_OBJSET) {
+		bzero(mac, ZIO_DATA_MAC_LEN);
+		return;
+	}
 
 	if (!BP_SHOULD_BYTESWAP(bp)) {
 		bcopy(&bp->blk_cksum.zc_word[2], mac, sizeof (uint64_t));
@@ -880,11 +917,339 @@ zio_crypt_copy_dnode_bonus(abd_t *src_abd, uint8_t *dst, uint_t datalen)
 	abd_return_buf(src_abd, src, datalen);
 }
 
+static int
+zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, boolean_t byteswap,
+    dnode_phys_t *dnp)
+{
+	int ret, i;
+	dnode_phys_t *adnp;
+	blkptr_t *curr_bp, *bp;
+	blkptr_t tmpbp;
+	boolean_t need_bswap = (byteswap ^ !ZFS_HOST_BYTEORDER);
+	uint64_t blkprop;
+	crypto_data_t cd;
+	uint8_t tmp_dncore[offsetof(dnode_phys_t, dn_blkptr)];
+	uint8_t mac[ZIO_DATA_MAC_LEN];
+
+	cd.cd_format = CRYPTO_DATA_RAW;
+	cd.cd_offset = 0;
+
+	/* authenticate the core dnode (masking out non-portable bits) */
+	bcopy(dnp, tmp_dncore, sizeof (tmp_dncore));
+	adnp = (dnode_phys_t *)tmp_dncore;
+	if (need_bswap) {
+		adnp->dn_datablkszsec = BSWAP_16(adnp->dn_datablkszsec);
+		adnp->dn_bonuslen = BSWAP_16(adnp->dn_bonuslen);
+		adnp->dn_maxblkid = BSWAP_64(adnp->dn_maxblkid);
+		adnp->dn_used = BSWAP_64(adnp->dn_used);
+	}
+	adnp->dn_flags &= DNODE_CRYPT_PORTABLE_FLAGS_MASK;
+	adnp->dn_used = 0;
+
+	cd.cd_length = sizeof (tmp_dncore);
+	cd.cd_raw.iov_base = (char *)adnp;
+	cd.cd_raw.iov_len = cd.cd_length;
+
+	ret = crypto_mac_update(ctx, &cd, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	for (i = 0; i < dnp->dn_nblkptr + 1; i++) {
+		if (i < dnp->dn_nblkptr) {
+			curr_bp = &dnp->dn_blkptr[i];
+		} else if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
+			curr_bp = DN_SPILL_BLKPTR(dnp);
+		} else {
+			break;
+		}
+
+		if (byteswap) {
+			tmpbp = *curr_bp;
+			byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
+			bp = &tmpbp;
+		} else {
+			bp = curr_bp;
+		}
+
+		blkprop = bp->blk_prop;
+		BF64_SET(blkprop, 62, 1, 0);
+		BF64_SET(blkprop, 40, 8, 0);
+		BF64_SET(blkprop, 16, 16, 0);
+		if (byteswap ^ need_bswap)
+			blkprop = BSWAP_64(blkprop);
+
+		cd.cd_length = sizeof (uint64_t);
+		cd.cd_raw.iov_base = (char *)&blkprop;
+		cd.cd_raw.iov_len = cd.cd_length;
+
+		ret = crypto_mac_update(ctx, &cd, NULL);
+		if (ret != CRYPTO_SUCCESS) {
+			ret = SET_ERROR(EIO);
+			goto error;
+		}
+
+		zio_crypt_decode_mac_bp(bp, mac);
+		cd.cd_length = ZIO_DATA_MAC_LEN;
+		cd.cd_raw.iov_base = (char *)mac;
+		cd.cd_raw.iov_len = cd.cd_length;
+
+		ret = crypto_mac_update(ctx, &cd, NULL);
+		if (ret != CRYPTO_SUCCESS) {
+			ret = SET_ERROR(EIO);
+			goto error;
+		}
+	}
+
+	return (0);
+
+error:
+	return (ret);
+}
+
+/*
+ * objset_phys_t blocks introduce a number of exceptions to the normal
+ * authentication process. objset_phys_t's contain 2 seperate HMACS for
+ * protecting the integrity of their data. The portable_mac protects the
+ * the metadnode. This MAC can be sent with a raw send and protects against
+ * reordering of data within the metadnode. The local_mac protects the the
+ * user accounting objects which are not sent from one system to another.
+ *
+ * In addition, objset blocks are the only blocks that can be modified and
+ * written to disk without the key loaded under certain circumstances. During
+ * zil_claim() we need to be able to update the zil_header_t to complete
+ * claiming log blocks and during raw receives we need to write out the
+ * portable_mac from the send file. Both of these actions are possible
+ * because these fields are not protected by either MAC so neither one will
+ * need to modify the MACs without the key. However, when the modified blocks
+ * are written out they will be byteswapped into the host machine's native
+ * endianness which will modify fields protected by the MAC. As a result, MAC
+ * calculation for objset blocks works slightly differently from other block
+ * types. Where other block types MAC the data in whatever endianness is
+ * written to disk, objset blocks always work on little endian values.
+ */
+int
+zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
+    boolean_t byteswap, uint8_t *portable_mac, uint8_t *local_mac)
+{
+	int ret;
+	crypto_mechanism_t mech;
+	crypto_context_t ctx;
+	crypto_data_t cd;
+	objset_phys_t *osp = data;
+	uint64_t intval;
+	boolean_t need_bswap = (byteswap ^ !ZFS_HOST_BYTEORDER);
+	uint8_t raw_portable_mac[SHA512_DIGEST_LEN];
+	uint8_t raw_local_mac[SHA512_DIGEST_LEN];
+
+	/* initialize sha 256 hmac mechanism */
+	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
+	mech.cm_param = NULL;
+	mech.cm_param_len = 0;
+
+	cd.cd_format = CRYPTO_DATA_RAW;
+	cd.cd_offset = 0;
+
+	/* calculate the portable MAC from the portable fields and metadnode */
+	ret = crypto_mac_init(&mech, &key->zk_hmac_key, NULL, &ctx, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	/* add in the os_type */
+	intval = (need_bswap) ? osp->os_type : BSWAP_64(osp->os_type);
+	cd.cd_length = sizeof (uint64_t);
+	cd.cd_raw.iov_base = (char *)&intval;
+	cd.cd_raw.iov_len = cd.cd_length;
+
+	ret = crypto_mac_update(ctx, &cd, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	/* add in the portable os_flags */
+	intval = osp->os_flags;
+	if (byteswap)
+		intval = BSWAP_64(intval);
+	intval &= OBJSET_CRYPT_PORTABLE_FLAGS_MASK;
+	if (byteswap ^ need_bswap)
+		intval = BSWAP_64(intval);
+
+	cd.cd_length = sizeof (uint64_t);
+	cd.cd_raw.iov_base = (char *)&intval;
+	cd.cd_raw.iov_len = cd.cd_length;
+
+	ret = crypto_mac_update(ctx, &cd, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	/* add in fields from the metadnode */
+	ret = zio_crypt_do_dnode_hmac_updates(ctx, byteswap,
+	    &osp->os_meta_dnode);
+	if (ret)
+		goto error;
+
+	/* store the final digest in a temporary buffer and copy what we need */
+	cd.cd_length = SHA512_DIGEST_LEN;
+	cd.cd_raw.iov_base = (char *)raw_portable_mac;
+	cd.cd_raw.iov_len = cd.cd_length;
+
+	ret = crypto_mac_final(ctx, &cd, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	bcopy(raw_portable_mac, portable_mac, ZIO_OBJSET_MAC_LEN);
+
+	/*
+	 * The local MAC protects the user and group accounting. If these
+	 * objects are not present, the local MAC is zeroed out.
+	 */
+	if (osp->os_userused_dnode.dn_type == DMU_OT_NONE &&
+	    osp->os_userused_dnode.dn_type == DMU_OT_NONE) {
+		bzero(local_mac, ZIO_OBJSET_MAC_LEN);
+		return (0);
+	}
+
+	/* calculate the local MAC from the userused and groupused dnodes */
+	ret = crypto_mac_init(&mech, &key->zk_hmac_key, NULL, &ctx, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	/* add in the non-portable os_flags */
+	intval = osp->os_flags;
+	if (byteswap)
+		intval = BSWAP_64(intval);
+	intval &= ~OBJSET_CRYPT_PORTABLE_FLAGS_MASK;
+	if (byteswap ^ need_bswap)
+		intval = BSWAP_64(intval);
+
+	cd.cd_length = sizeof (uint64_t);
+	cd.cd_raw.iov_base = (char *)&intval;
+	cd.cd_raw.iov_len = cd.cd_length;
+
+	ret = crypto_mac_update(ctx, &cd, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	/* add in fields from the user accounting dnodes */
+	ret = zio_crypt_do_dnode_hmac_updates(ctx, byteswap,
+	    &osp->os_userused_dnode);
+	if (ret)
+		goto error;
+
+	ret = zio_crypt_do_dnode_hmac_updates(ctx, byteswap,
+	    &osp->os_groupused_dnode);
+	if (ret)
+		goto error;
+
+	/* store the final digest in a temporary buffer and copy what we need */
+	cd.cd_length = SHA512_DIGEST_LEN;
+	cd.cd_raw.iov_base = (char *)raw_local_mac;
+	cd.cd_raw.iov_len = cd.cd_length;
+
+	ret = crypto_mac_final(ctx, &cd, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	bcopy(raw_local_mac, local_mac, ZIO_OBJSET_MAC_LEN);
+
+	return (0);
+
+error:
+	bzero(portable_mac, ZIO_OBJSET_MAC_LEN);
+	bzero(local_mac, ZIO_OBJSET_MAC_LEN);
+	return (ret);
+}
+
 static void
 zio_crypt_destroy_uio(uio_t *uio)
 {
 	if (uio->uio_iov)
 		kmem_free(uio->uio_iov, uio->uio_iovcnt * sizeof (iovec_t));
+}
+
+int
+zio_crypt_do_indirect_mac_checksum(boolean_t generate, void *buf,
+    uint_t datalen, boolean_t byteswap, uint8_t *cksum)
+{
+	blkptr_t *bp, *curr_bp;
+	int i, epb = datalen >> SPA_BLKPTRSHIFT;
+	uint64_t blkprop;
+	SHA2_CTX ctx;
+	blkptr_t tmpbp;
+	uint8_t digestbuf[SHA512_DIGEST_LEN];
+	uint8_t mac[ZIO_DATA_MAC_LEN];
+
+	/* checksum all of the MACs from the layer below */
+	SHA2Init(SHA512, &ctx);
+	for (i = 0, curr_bp = buf; i < epb; i++, curr_bp++) {
+		if (byteswap) {
+			tmpbp = *curr_bp;
+			byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
+			bp = &tmpbp;
+		} else {
+			bp = curr_bp;
+		}
+
+		ASSERT(BP_USES_CRYPT(bp) || BP_IS_HOLE(bp));
+		ASSERT0(BP_IS_EMBEDDED(bp));
+
+		/*
+		 * The top level objset MAC protects all the checksums of all
+		 * MACs below. It also protects everything in blk_prop except
+		 * for the checksum, dedup, and psize bits.
+		 */
+		blkprop = bp->blk_prop;
+		BF64_SET(blkprop, 62, 1, 0);
+		BF64_SET(blkprop, 40, 8, 0);
+		BF64_SET(blkprop, 16, 16, 0);
+		if (byteswap)
+			blkprop = BSWAP_64(blkprop);
+		SHA2Update(&ctx, &blkprop, sizeof (uint64_t));
+
+		zio_crypt_decode_mac_bp(bp, mac);
+		SHA2Update(&ctx, mac, ZIO_DATA_MAC_LEN);
+	}
+	SHA2Final(digestbuf, &ctx);
+
+	if (generate) {
+		bcopy(digestbuf, cksum, ZIO_DATA_MAC_LEN);
+		return (0);
+	}
+
+	if (bcmp(digestbuf, cksum, ZIO_DATA_MAC_LEN) != 0)
+		return (SET_ERROR(ECKSUM));
+
+	return (0);
+}
+
+int
+zio_crypt_do_indirect_mac_checksum_abd(boolean_t generate, abd_t *abd,
+    uint_t datalen, boolean_t byteswap, uint8_t *cksum)
+{
+
+	int ret;
+	void *buf;
+
+	buf = abd_borrow_buf_copy(abd, datalen);
+	ret = zio_crypt_do_indirect_mac_checksum(generate, buf, datalen,
+	    byteswap, cksum);
+	abd_return_buf(abd, buf, datalen);
+
+	return (ret);
 }
 
 /*
@@ -895,11 +1260,11 @@ zio_crypt_destroy_uio(uio_t *uio)
  */
 static int
 zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
-    uint8_t *cipherbuf, uint_t datalen, uio_t *puio, uio_t *cuio,
-    uint_t *enc_len, uint8_t **authbuf, uint_t *auth_len, boolean_t *no_crypt)
+    uint8_t *cipherbuf, uint_t datalen, boolean_t byteswap, uio_t *puio,
+    uio_t *cuio, uint_t *enc_len, uint8_t **authbuf, uint_t *auth_len,
+    boolean_t *no_crypt)
 {
 	int ret;
-	boolean_t byteswap;
 	uint64_t txtype;
 	uint_t nr_src, nr_dst, lr_len, crypt_len;
 	uint_t aad_len = 0, nr_iovecs = 0, total_len = 0;
@@ -926,20 +1291,7 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 	zilc = (zil_chain_t *)src;
 	slrp = src + sizeof (zil_chain_t);
 	aadp = aadbuf;
-
-	/*
-	 * Determine if we need to byteswap values we use for parsing. If we
-	 * are writing the data, the zec_magic value will not exist so we must
-	 * be writing this block in native endianness.
-	 */
-	if (zilc->zc_eck.zec_magic == BSWAP_64(ZEC_MAGIC)) {
-		ASSERT(!encrypt);
-		byteswap = B_TRUE;
-		blkend = src + BSWAP_64(zilc->zc_nused);
-	} else {
-		byteswap = B_FALSE;
-		blkend = src + zilc->zc_nused;
-	}
+	blkend = src + ((byteswap) ? BSWAP_64(zilc->zc_nused) : zilc->zc_nused);
 
 	/* calculate the number of encrypted iovecs we will need */
 	for (; slrp < blkend; slrp += lr_len) {
@@ -1091,17 +1443,22 @@ error:
 
 static int
 zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
-    uint8_t *cipherbuf, uint_t datalen, uio_t *puio, uio_t *cuio,
-    uint_t *enc_len, uint8_t **authbuf, uint_t *auth_len, boolean_t *no_crypt)
+    uint8_t *cipherbuf, uint_t datalen, boolean_t byteswap, uio_t *puio,
+    uio_t *cuio, uint_t *enc_len, uint8_t **authbuf, uint_t *auth_len,
+    boolean_t *no_crypt)
 {
 	int ret;
+	blkptr_t *curr_bp, *bp;
+	blkptr_t tmpbp;
+	uint64_t blkprop;
 	uint_t nr_src, nr_dst, crypt_len;
 	uint_t aad_len = 0, nr_iovecs = 0, total_len = 0;
-	uint_t i, max_dnp = datalen >> DNODE_SHIFT;
+	uint_t i, j, max_dnp = datalen >> DNODE_SHIFT;
 	iovec_t *src_iovecs = NULL, *dst_iovecs = NULL;
 	uint8_t *src, *dst, *bonus, *bonus_end, *dn_end, *aadp;
-	dnode_phys_t *dnp, *sdnp, *ddnp;
+	dnode_phys_t *dnp, *adnp, *sdnp, *ddnp;
 	uint8_t *aadbuf = zio_buf_alloc(datalen);
+	uint8_t mac[ZIO_DATA_MAC_LEN];
 
 	if (encrypt) {
 		src = plainbuf;
@@ -1152,19 +1509,19 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 		}
 	}
 
-	if (nr_iovecs == 0) {
-		/* XXX placeholder until full dnode authentication is added */
-		uint64_t placeholder = 0x2f52f52f5ULL;
-		bcopy(&placeholder, aadp, sizeof (uint64_t));
-		aad_len += sizeof (uint64_t);
-		goto out;
-	}
-
 	nr_iovecs = 0;
 
 	for (i = 0; i < max_dnp; i += sdnp[i].dn_extra_slots + 1) {
 		dnp = &sdnp[i];
 		dn_end = (uint8_t *)(dnp + (dnp->dn_extra_slots + 1));
+
+		/*
+		 * Copy everything from the dource to the destination.
+		 * Wherever we find an encrypted bonus buffer type, we prepare
+		 * an iovec_t instead. The encryption / decryption functions
+		 * will replace fill this in for us with the encrypted or
+		 * decrypted data
+		 */
 		if (dnp->dn_type != DMU_OT_NONE &&
 		    DMU_OT_IS_ENCRYPTED(dnp->dn_bonustype) &&
 		    dnp->dn_bonuslen != 0) {
@@ -1182,18 +1539,71 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 			dst_iovecs[nr_iovecs].iov_base = DN_BONUS(&ddnp[i]);
 			dst_iovecs[nr_iovecs].iov_len = crypt_len;
 
-			if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR)
+			if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
 				bcopy(bonus_end, DN_SPILL_BLKPTR(&ddnp[i]),
 				    sizeof (blkptr_t));
+			}
 
 			nr_iovecs++;
 			total_len += crypt_len;
 		} else {
 			bcopy(dnp, &ddnp[i], dn_end - (uint8_t *)dnp);
 		}
+
+		/*
+		 * Handle authenticated data. We authenticate everything in
+		 * the dnode that can be brought over when we do a raw send.
+		 * This includes all of the core fields as well as the MACs
+		 * stored in the bp checksums. We also include the padding
+		 * here in case it ever gets used in the future. Some of
+		 * dn_flags and dn_used are not portable so we mask those out.
+		 */
+		crypt_len = offsetof(dnode_phys_t, dn_blkptr);
+		bcopy(dnp, aadp, crypt_len);
+		adnp = (dnode_phys_t *)aadp;
+		adnp->dn_flags &= DNODE_CRYPT_PORTABLE_FLAGS_MASK;
+		adnp->dn_used = 0;
+		aadp += crypt_len;
+		aad_len += crypt_len;
+
+		for (j = 0; j < dnp->dn_nblkptr + 1; j++) {
+			if (j < dnp->dn_nblkptr) {
+				curr_bp = &dnp->dn_blkptr[j];
+			} else if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
+				curr_bp = DN_SPILL_BLKPTR(dnp);
+			} else {
+				break;
+			}
+
+			if (byteswap) {
+				tmpbp = *curr_bp;
+				byteswap_uint64_array(&tmpbp,
+				    sizeof (blkptr_t));
+				bp = &tmpbp;
+			} else {
+				bp = curr_bp;
+			}
+
+			blkprop = bp->blk_prop;
+			BF64_SET(blkprop, 62, 1, 0);
+			BF64_SET(blkprop, 40, 8, 0);
+			BF64_SET(blkprop, 16, 16, 0);
+			if (byteswap)
+				blkprop = BSWAP_64(blkprop);
+
+			crypt_len = sizeof (uint64_t);
+			bcopy(&blkprop, aadp, crypt_len);
+			aadp += crypt_len;
+			aad_len += crypt_len;
+
+			zio_crypt_decode_mac_bp(bp, mac);
+			crypt_len = ZIO_DATA_MAC_LEN;
+			bcopy(mac, aadp, crypt_len);
+			aadp += crypt_len;
+			aad_len += crypt_len;
+		}
 	}
 
-out:
 	*no_crypt = (nr_iovecs == 0);
 	*enc_len = total_len;
 	*authbuf = aadbuf;
@@ -1284,8 +1694,9 @@ error:
 
 static int
 zio_crypt_init_uios(boolean_t encrypt, dmu_object_type_t ot, uint8_t *plainbuf,
-    uint8_t *cipherbuf, uint_t datalen, uint8_t *mac, uio_t *puio, uio_t *cuio,
-    uint_t *enc_len, uint8_t **authbuf, uint_t *auth_len, boolean_t *no_crypt)
+    uint8_t *cipherbuf, uint_t datalen, boolean_t byteswap, uint8_t *mac,
+    uio_t *puio, uio_t *cuio, uint_t *enc_len, uint8_t **authbuf,
+    uint_t *auth_len, boolean_t *no_crypt)
 {
 	int ret;
 	iovec_t *mac_iov;
@@ -1296,11 +1707,13 @@ zio_crypt_init_uios(boolean_t encrypt, dmu_object_type_t ot, uint8_t *plainbuf,
 	switch (ot) {
 	case DMU_OT_INTENT_LOG:
 		ret = zio_crypt_init_uios_zil(encrypt, plainbuf, cipherbuf,
-		    datalen, puio, cuio, enc_len, authbuf, auth_len, no_crypt);
+		    datalen, byteswap, puio, cuio, enc_len, authbuf, auth_len,
+		    no_crypt);
 		break;
 	case DMU_OT_DNODE:
 		ret = zio_crypt_init_uios_dnode(encrypt, plainbuf, cipherbuf,
-		    datalen, puio, cuio, enc_len, authbuf, auth_len, no_crypt);
+		    datalen, byteswap, puio, cuio, enc_len, authbuf, auth_len,
+		    no_crypt);
 		break;
 	default:
 		ret = zio_crypt_init_uios_normal(encrypt, plainbuf, cipherbuf,
@@ -1334,7 +1747,8 @@ error:
 int
 zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
     dmu_object_type_t ot, uint8_t *iv, uint8_t *mac, uint_t datalen,
-    uint8_t *plainbuf, uint8_t *cipherbuf, boolean_t *no_crypt)
+    boolean_t byteswap, uint8_t *plainbuf, uint8_t *cipherbuf,
+    boolean_t *no_crypt)
 {
 	int ret;
 	boolean_t locked = B_FALSE;
@@ -1342,7 +1756,7 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
 	uint_t keydata_len = zio_crypt_table[crypt].ci_keylen;
 	uint_t enc_len, auth_len;
 	uio_t puio, cuio;
-	uint8_t enc_keydata[MAX_MASTER_KEY_LEN];
+	uint8_t enc_keydata[MASTER_KEY_MAX_LEN];
 	crypto_key_t tmp_ckey, *ckey = NULL;
 	crypto_ctx_template_t tmpl;
 	uint8_t *authbuf = NULL;
@@ -1352,7 +1766,8 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
 
 	/* create uios for encryption */
 	ret = zio_crypt_init_uios(encrypt, ot, plainbuf, cipherbuf, datalen,
-	    mac, &puio, &cuio, &enc_len, &authbuf, &auth_len, no_crypt);
+	    byteswap, mac, &puio, &cuio, &enc_len, &authbuf, &auth_len,
+	    no_crypt);
 	if (ret != 0)
 		return (ret);
 
@@ -1372,7 +1787,7 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
 		rw_exit(&key->zk_salt_lock);
 		locked = B_FALSE;
 
-		ret = hkdf_sha256(key->zk_master_keydata, keydata_len, NULL, 0,
+		ret = hkdf_sha512(key->zk_master_keydata, keydata_len, NULL, 0,
 		    salt, ZIO_DATA_SALT_LEN, enc_keydata, keydata_len);
 		if (ret != 0)
 			goto error;
@@ -1425,7 +1840,7 @@ error:
 int
 zio_do_crypt_abd(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
     dmu_object_type_t ot, uint8_t *iv, uint8_t *mac, uint_t datalen,
-    abd_t *pabd, abd_t *cabd, boolean_t *no_crypt)
+    boolean_t byteswap, abd_t *pabd, abd_t *cabd, boolean_t *no_crypt)
 {
 	int ret;
 	void *ptmp, *ctmp;
@@ -1439,7 +1854,7 @@ zio_do_crypt_abd(boolean_t encrypt, zio_crypt_key_t *key, uint8_t *salt,
 	}
 
 	ret = zio_do_crypt_data(encrypt, key, salt, ot, iv, mac,
-	    datalen, ptmp, ctmp, no_crypt);
+	    datalen, byteswap, ptmp, ctmp, no_crypt);
 	if (ret != 0)
 		goto error;
 

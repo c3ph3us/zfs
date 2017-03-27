@@ -118,9 +118,9 @@ const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"DDT ZAP algorithm"	},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"DDT statistics"	},
 	{ DMU_BSWAP_UINT8,	TRUE,	TRUE,	"System attributes"	},
-	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"SA master node"	},
-	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"SA attr registration"	},
-	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"SA attr layouts"	},
+	{ DMU_BSWAP_ZAP,	TRUE,	TRUE,	"SA master node"	},
+	{ DMU_BSWAP_ZAP,	TRUE,	TRUE,	"SA attr registration"	},
+	{ DMU_BSWAP_ZAP,	TRUE,	TRUE,	"SA attr layouts"	},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"scan translations"	},
 	{ DMU_BSWAP_UINT8,	FALSE,	FALSE,	"deduplicated block"	},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"DSL deadlist map"	},
@@ -1507,6 +1507,11 @@ dmu_convert_to_raw(dmu_buf_t *handle, boolean_t byteorder, const uint8_t *salt,
 	type = DB_DNODE(db)->dn_type;
 	DB_DNODE_EXIT(db);
 
+	/*
+	 * This technically violates the assumption the dmu code makes
+	 * that dnode blocks are only released in syncing context.
+	 */
+	(void) arc_release(db->db_buf, db);
 	arc_convert_to_raw(db->db_buf, dsobj, byteorder, type, salt, iv, mac);
 }
 
@@ -1906,6 +1911,20 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 }
 
 int
+dmu_object_set_nlevels(objset_t *os, uint64_t object, int nlevels, dmu_tx_t *tx)
+{
+	dnode_t *dn;
+	int err;
+
+	err = dnode_hold(os, object, FTAG, &dn);
+	if (err)
+		return (err);
+	err = dnode_set_nlevels(dn, nlevels, tx);
+	dnode_rele(dn, FTAG);
+	return (err);
+}
+
+int
 dmu_object_set_blocksize(objset_t *os, uint64_t object, uint64_t size, int ibs,
     dmu_tx_t *tx)
 {
@@ -2068,19 +2087,21 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 	}
 
 	/*
-	 * Encrypted objects override the checksum type with sha256-mac (which
-	 * is dedupable). Encrypted, dedup'd ojects cannot use all available
-	 * copies since we use the last one to store the IV. Encryption is also
-	 * incompatible with nopwrite because encrypted checksums are not
-	 * reproducible (unless dedup is on).
+	 * All objects in an encrypted objset are protected from modification
+	 * via a MAC. Encrypted objects store their IV and salt in the last DVA
+	 * in the bp, so we cannot use all copies. Encrypted objects are also
+	 * not subject to nopwrite since writing the same data will still
+	 * result in a new ciphertext.
 	 */
-	if (os->os_encrypted && DMU_OT_IS_ENCRYPTED(type) &&
-	    !(wp & WP_NOFILL) && level <= 0) {
+	if (os->os_encrypted && (wp & WP_NOFILL) == 0) {
 		encrypt = B_TRUE;
-		nopwrite = B_FALSE;
-		copies = MIN(copies, SPA_DVAS_PER_BP - 1);
 
-		if (type == DMU_OT_DNODE)
+		if (DMU_OT_IS_ENCRYPTED(type)) {
+			copies = MIN(copies, SPA_DVAS_PER_BP - 1);
+			nopwrite = B_FALSE;
+		}
+
+		if (type == DMU_OT_DNODE || type == DMU_OT_OBJSET)
 			compress = ZIO_COMPRESS_EMPTY;
 	}
 
@@ -2098,7 +2119,6 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 	bzero(zp->zp_iv, ZIO_DATA_IV_LEN);
 	bzero(zp->zp_mac, ZIO_DATA_MAC_LEN);
 
-	ASSERT(!(zp->zp_encrypt && zp->zp_copies >= 3));
 	ASSERT3U(zp->zp_compress, !=, ZIO_COMPRESS_INHERIT);
 }
 
@@ -2354,6 +2374,7 @@ EXPORT_SYMBOL(dmu_object_info_from_dnode);
 EXPORT_SYMBOL(dmu_object_info_from_db);
 EXPORT_SYMBOL(dmu_object_size_from_db);
 EXPORT_SYMBOL(dmu_object_dnsize_from_db);
+EXPORT_SYMBOL(dmu_object_set_nlevels);
 EXPORT_SYMBOL(dmu_object_set_blocksize);
 EXPORT_SYMBOL(dmu_object_set_checksum);
 EXPORT_SYMBOL(dmu_object_set_compress);

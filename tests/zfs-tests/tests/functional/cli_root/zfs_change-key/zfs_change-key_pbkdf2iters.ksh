@@ -52,24 +52,24 @@ function verify_pbkdf2iters
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
+		log_must zfs destroy -f $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
 log_assert "'zfs change-key -o' should change the pbkdf2 iterations"
 
-log_must eval "$ECHO $PASSPHRASE > /$TESTPOOL/pkey"
-log_must $ZFS create -o encryption=on -o keyformat=passphrase \
+log_must eval "echo $PASSPHRASE > /$TESTPOOL/pkey"
+log_must zfs create -o encryption=on -o keyformat=passphrase \
 	-o keylocation=file:///$TESTPOOL/pkey -o pbkdf2iters=200000 \
 	$TESTPOOL/$TESTFS1
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
 log_must verify_pbkdf2iters $TESTPOOL/$TESTFS1 "200000"
 
-log_must $ZFS change-key -o pbkdf2iters=150000 $TESTPOOL/$TESTFS1
+log_must zfs change-key -o pbkdf2iters=150000 $TESTPOOL/$TESTFS1
 log_must verify_pbkdf2iters $TESTPOOL/$TESTFS1 "150000"
 
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
-log_must $ZFS load-key $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
+log_must zfs load-key $TESTPOOL/$TESTFS1
 
 log_pass "'zfs change-key -o' changes the pbkdf2 iterations"
