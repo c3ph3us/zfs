@@ -1635,7 +1635,7 @@ open_objset(const char *path, dmu_objset_type_t type, void *tag, objset_t **osp)
 		return (err);
 	}
 
-	if (dmu_objset_type(*osp) == DMU_OST_ZFS) {
+	if (dmu_objset_type(*osp) == DMU_OST_ZFS && !(*osp)->os_encrypted) {
 		(void) zap_lookup(*osp, MASTER_NODE_OBJ, ZPL_VERSION_STR,
 		    8, 1, &version);
 		if (version >= ZPL_VERSION_SA) {
