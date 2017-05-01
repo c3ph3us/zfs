@@ -431,8 +431,7 @@ error:
 }
 
 int
-dsl_crypto_can_set_keylocation(const char *dsname, zprop_source_t source,
-    const char *keylocation)
+dsl_crypto_can_set_keylocation(const char *dsname, const char *keylocation)
 {
 	int ret = 0;
 	dsl_dir_t *dd = NULL;
@@ -463,12 +462,6 @@ dsl_crypto_can_set_keylocation(const char *dsname, zprop_source_t source,
 	/* check for a valid keylocation for encrypted datasets */
 	if (!zfs_prop_valid_keylocation(keylocation, B_TRUE)) {
 		ret = SET_ERROR(EINVAL);
-		goto out;
-	}
-
-	/* If this is a received keylocation we don't need do anything else */
-	if ((source & ZPROP_SRC_RECEIVED) != 0) {
-		ret = 0;
 		goto out;
 	}
 
@@ -1315,8 +1308,8 @@ error:
 
 
 static void
-spa_keystore_change_key_sync_impl(dcp_cmd_t cmd, uint64_t root_ddobj,
-    uint64_t ddobj, dsl_wrapping_key_t *wkey, dmu_tx_t *tx)
+spa_keystore_change_key_sync_impl(dcp_cmd_t cmd, uint64_t rddobj,
+    uint64_t ddobj, uint64_t new_rddobj, dsl_wrapping_key_t *wkey, dmu_tx_t *tx)
 {
 	zap_cursor_t *zc;
 	zap_attribute_t *za;
@@ -1339,7 +1332,7 @@ spa_keystore_change_key_sync_impl(dcp_cmd_t cmd, uint64_t root_ddobj,
 	/* stop recursing if this dsl dir didn't inherit from the root */
 	VERIFY0(dsl_dir_get_encryption_root_ddobj(dd, &curr_rddobj));
 
-	if (curr_rddobj != root_ddobj) {
+	if (curr_rddobj != rddobj) {
 		dsl_dir_rele(dd, FTAG);
 		return;
 	}
@@ -1351,7 +1344,7 @@ spa_keystore_change_key_sync_impl(dcp_cmd_t cmd, uint64_t root_ddobj,
 	 */
 	if (wkey == NULL) {
 		VERIFY0(zap_update(dp->dp_meta_objset, dd->dd_crypto_obj,
-		    DSL_CRYPTO_KEY_ROOT_DDOBJ, 8, 1, &root_ddobj, tx));
+		    DSL_CRYPTO_KEY_ROOT_DDOBJ, 8, 1, &new_rddobj, tx));
 	} else {
 		VERIFY0(spa_keystore_dsl_key_hold_dd(dp->dp_spa, dd,
 		    FTAG, &dck));
@@ -1359,6 +1352,7 @@ spa_keystore_change_key_sync_impl(dcp_cmd_t cmd, uint64_t root_ddobj,
 		dsl_wrapping_key_rele(dck->dck_wkey, dck);
 		dck->dck_wkey = wkey;
 		dsl_crypto_key_sync(dck, tx);
+		spa_keystore_dsl_key_rele(dp->dp_spa, dck, FTAG);
 	}
 
 	zc = kmem_alloc(sizeof (zap_cursor_t), KM_SLEEP);
@@ -1373,15 +1367,14 @@ spa_keystore_change_key_sync_impl(dcp_cmd_t cmd, uint64_t root_ddobj,
 	    dsl_dir_phys(dd)->dd_child_dir_zapobj);
 	    zap_cursor_retrieve(zc, za) == 0;
 	    zap_cursor_advance(zc)) {
-		spa_keystore_change_key_sync_impl(cmd, root_ddobj,
-		    za->za_first_integer, wkey, tx);
+		spa_keystore_change_key_sync_impl(cmd, rddobj,
+		    za->za_first_integer, new_rddobj, wkey, tx);
 	}
 	zap_cursor_fini(zc);
 
 	kmem_free(za, sizeof (zap_attribute_t));
 	kmem_free(zc, sizeof (zap_cursor_t));
 
-	spa_keystore_dsl_key_rele(dp->dp_spa, dck, FTAG);
 	dsl_dir_rele(dd, FTAG);
 }
 
@@ -1397,7 +1390,7 @@ spa_keystore_change_key_sync(void *arg, dmu_tx_t *tx)
 	dsl_wrapping_key_t *wkey = NULL, *found_wkey;
 	dsl_wrapping_key_t wkey_search;
 	char *keylocation = dcp->cp_keylocation;
-	uint64_t rddobj;
+	uint64_t rddobj, new_rddobj;
 
 	/* create and initialize the wrapping key */
 	VERIFY0(dsl_dataset_hold(dp, skcka->skcka_dsname, FTAG, &ds));
@@ -1411,12 +1404,12 @@ spa_keystore_change_key_sync(void *arg, dmu_tx_t *tx)
 		 * command can set keylocation even if it can't normally be
 		 * set via 'zfs set' due to a non-local keylocation.
 		 */
-		wkey = dcp->cp_wkey;
-		wkey->wk_ddobj = ds->ds_dir->dd_object;
-		VERIFY0(dsl_dir_get_encryption_root_ddobj(ds->ds_dir, &rddobj));
-
-		if (dcp->cp_cmd == DCP_CMD_FORCE_NEW_KEY)
+		if (dcp->cp_cmd == DCP_CMD_NEW_KEY) {
+			wkey = dcp->cp_wkey;
+			wkey->wk_ddobj = ds->ds_dir->dd_object;
+		} else {
 			keylocation = "none";
+		}
 
 		if (keylocation != NULL) {
 			dsl_prop_set_sync_impl(ds,
@@ -1424,18 +1417,25 @@ spa_keystore_change_key_sync(void *arg, dmu_tx_t *tx)
 			    ZPROP_SRC_LOCAL, 1, strlen(keylocation) + 1,
 			    keylocation, tx);
 		}
+
+		VERIFY0(dsl_dir_get_encryption_root_ddobj(ds->ds_dir, &rddobj));
+		new_rddobj = ds->ds_dir->dd_object;
 	} else {
 		/*
 		 * We are inheritting the parent's wkey. Unset any local
 		 * keylocation and grab a reference to the wkey.
 		 */
-		VERIFY0(spa_keystore_wkey_hold_dd(spa,
-		    ds->ds_dir->dd_parent, FTAG, &wkey));
-		rddobj = ds->ds_dir->dd_object;
+		if (dcp->cp_cmd == DCP_CMD_INHERIT) {
+			VERIFY0(spa_keystore_wkey_hold_dd(spa,
+			    ds->ds_dir->dd_parent, FTAG, &wkey));
+		}
 
 		dsl_prop_set_sync_impl(ds,
 		    zfs_prop_to_name(ZFS_PROP_KEYLOCATION), ZPROP_SRC_NONE,
 		    0, 0, NULL, tx);
+
+		rddobj = ds->ds_dir->dd_object;
+		new_rddobj = ds->ds_dir->dd_parent->dd_object;
 	}
 
 	if (wkey == NULL) {
@@ -1447,7 +1447,7 @@ spa_keystore_change_key_sync(void *arg, dmu_tx_t *tx)
 
 	/* recurse through all children and rewrap their keys */
 	spa_keystore_change_key_sync_impl(dcp->cp_cmd, rddobj,
-	    ds->ds_dir->dd_object, wkey, tx);
+	    ds->ds_dir->dd_object, new_rddobj, wkey, tx);
 
 	/*
 	 * All references to the old wkey should be released now (if it

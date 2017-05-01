@@ -2454,7 +2454,7 @@ zfs_prop_set_special(const char *dsname, zprop_source_t source,
 			err = -1;
 		break;
 	case ZFS_PROP_KEYLOCATION:
-		err = dsl_crypto_can_set_keylocation(dsname, source, strval);
+		err = dsl_crypto_can_set_keylocation(dsname, strval);
 
 		/*
 		 * Set err to -1 to force the zfs_set_prop_nvlist code down the
@@ -4179,7 +4179,11 @@ extract_delay_props(nvlist_t *props)
 {
 	nvlist_t *delayprops;
 	nvpair_t *nvp, *tmp;
-	static const zfs_prop_t delayable[] = { ZFS_PROP_REFQUOTA, 0 };
+	static const zfs_prop_t delayable[] = {
+		ZFS_PROP_REFQUOTA,
+		ZFS_PROP_KEYLOCATION,
+		0
+	};
 	int i;
 
 	VERIFY(nvlist_alloc(&delayprops, NV_UNIQUE_NAME, KM_SLEEP) == 0);

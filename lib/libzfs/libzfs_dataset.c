@@ -1677,8 +1677,7 @@ zfs_setprop_error(libzfs_handle_t *hdl, zfs_prop_t prop, int err,
 	case EACCES:
 		if (prop == ZFS_PROP_KEYLOCATION) {
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-			    "Keylocation may only be set if it is set locally. "
-			    "This may be changed with 'zfs change-key.'"));
+			    "keylocation may only be set on encryption roots"));
 			(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
 		} else {
 			(void) zfs_standard_error(hdl, err, errbuf);

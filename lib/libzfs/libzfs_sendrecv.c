@@ -2621,37 +2621,47 @@ created_before(libzfs_handle_t *hdl, avl_tree_t *avl,
  * to everything is in its correct place.
  */
 static int
-recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, avl_tree_t *stream_avl,
-    nvlist_t *local_nv)
+recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, const char *destname,
+    nvlist_t *stream_nv, avl_tree_t *stream_avl)
 {
 	int err;
 	nvpair_t *fselem = NULL;
+	nvlist_t *stream_fss;
 
-	while ((fselem = nvlist_next_nvpair(local_nv, fselem)) != NULL) {
+	VERIFY(0 == nvlist_lookup_nvlist(stream_nv, "fss", &stream_fss));
+
+	while ((fselem = nvlist_next_nvpair(stream_fss, fselem)) != NULL) {
 		zfs_handle_t *zhp = NULL;
 		uint64_t crypt;
-		nvlist_t *nvfs, *snaps, *stream_nvfs = NULL;
+		nvlist_t *snaps, *stream_nvfs = NULL;
 		nvpair_t *snapel = NULL;
 		boolean_t is_encroot, is_clone, stream_encroot;
-		char *fsname;
+		char *cp;
+		char fsname[ZFS_MAX_DATASET_NAME_LEN];
 
-		VERIFY(0 == nvpair_value_nvlist(fselem, &nvfs));
-		VERIFY(0 == nvlist_lookup_nvlist(nvfs, "snaps", &snaps));
+		VERIFY(0 == nvpair_value_nvlist(fselem, &stream_nvfs));
+		VERIFY(0 == nvlist_lookup_nvlist(stream_nvfs, "snaps", &snaps));
+		stream_encroot = nvlist_exists(stream_nvfs, "is_encroot");
 
+		/* find a snapshot from the stream that exists locally */
+		err = ENOENT;
 		while ((snapel = nvlist_next_nvpair(snaps, snapel)) != NULL) {
-			uint64_t thisguid;
+			uint64_t guid;
 
-			VERIFY(0 == nvpair_value_uint64(snapel, &thisguid));
-			stream_nvfs = fsavl_find(stream_avl, thisguid, NULL);
-
-			if (stream_nvfs != NULL)
+			VERIFY(0 == nvpair_value_uint64(snapel, &guid));
+			err = guid_to_name(hdl, destname, guid, B_FALSE,
+			    fsname);
+			if (err == 0)
 				break;
 		}
 
-		if (stream_nvfs == NULL)
+		if (err != 0)
 			continue;
 
-		/* we don't need to do anything for unencrypted filesystems */
+		cp = strchr(fsname, '@');
+		if (cp != NULL)
+			*cp = '\0';
+
 		zhp = zfs_open(hdl, fsname, ZFS_TYPE_DATASET);
 		if (zhp == NULL) {
 			err = ENOENT;
@@ -2659,15 +2669,13 @@ recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, avl_tree_t *stream_avl,
 		}
 
 		crypt = zfs_prop_get_int(zhp, ZFS_PROP_ENCRYPTION);
+		is_clone = zhp->zfs_dmustats.dds_origin[0] != '\0';
+		(void) zfs_crypto_get_encryption_root(zhp, &is_encroot, NULL);
 		zfs_close(zhp);
 
-		if (crypt != ZIO_CRYPT_OFF)
+		/* we don't need to do anything for unencrypted filesystems */
+		if (crypt == ZIO_CRYPT_OFF)
 			continue;
-
-		VERIFY(0 == nvlist_lookup_string(nvfs, "name", &fsname));
-		is_clone = nvlist_exists(nvfs, "origin");
-		is_encroot = nvlist_exists(nvfs, "is_encroot");
-		stream_encroot = nvlist_exists(stream_nvfs, "is_encroot");
 
 		/*
 		 * If the dataset is flagged as an encryption root,
@@ -2682,9 +2690,9 @@ recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, avl_tree_t *stream_avl,
 		}
 
 		/*
-		 * If the dataset is not flagged as an encryption root or
-		 * and is currently an encryption root, force it to inherit
-		 * from its parent.
+		 * If the dataset is not flagged as an encryption root and is
+		 * currently an encryption root, force it to inherit from its
+		 * parent.
 		 */
 		if (!stream_encroot && is_encroot) {
 			err = lzc_change_key(fsname, DCP_CMD_FORCE_INHERIT,
@@ -2991,16 +2999,6 @@ again:
 	}
 
 doagain:
-	/*
-	 * On the last iteration, fix the encryption key heirarchy before
-	 * we free the local_nv.
-	 */
-	error = 0;
-	if (!needagain || !progress) {
-		error = recv_fix_encryption_heirarchy(hdl, stream_avl,
-		    local_nv);
-	}
-
 	fsavl_destroy(local_avl);
 	nvlist_free(local_nv);
 	nvlist_free(deleted);
@@ -3032,7 +3030,7 @@ zfs_receive_package(libzfs_handle_t *hdl, int fd, const char *destname,
 	int error;
 	boolean_t anyerr = B_FALSE;
 	boolean_t softerr = B_FALSE;
-	boolean_t recursive;
+	boolean_t recursive, raw;
 
 	(void) snprintf(errbuf, sizeof (errbuf), dgettext(TEXT_DOMAIN,
 	    "cannot receive"));
@@ -3056,6 +3054,7 @@ zfs_receive_package(libzfs_handle_t *hdl, int fd, const char *destname,
 
 	recursive = (nvlist_lookup_boolean(stream_nv, "not_recursive") ==
 	    ENOENT);
+	raw = (nvlist_lookup_boolean(stream_nv, "raw") == 0);
 
 	if (recursive && strchr(destname, '@')) {
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
@@ -3209,6 +3208,11 @@ zfs_receive_package(libzfs_handle_t *hdl, int fd, const char *destname,
 		 */
 		softerr = recv_incremental_replication(hdl, tofs, flags,
 		    stream_nv, stream_avl, NULL);
+	}
+
+	if (raw && softerr == 0) {
+		softerr = recv_fix_encryption_heirarchy(hdl, destname,
+		    stream_nv, stream_avl);
 	}
 
 out:
@@ -3734,6 +3738,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		}
 
 		newfs = B_TRUE;
+		*cp = '/';
 	}
 
 	if (flags->verbose) {

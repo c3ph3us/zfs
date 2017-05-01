@@ -161,8 +161,7 @@ int dsl_crypto_params_create_nvlist(dcp_cmd_t cmd, nvlist_t *props,
     nvlist_t *crypto_args, dsl_crypto_params_t **dcp_out);
 void dsl_crypto_params_free(dsl_crypto_params_t *dcp, boolean_t unload);
 void dsl_dataset_crypt_stats(struct dsl_dataset *ds, nvlist_t *nv);
-int dsl_crypto_can_set_keylocation(const char *dsname, zprop_source_t source,
-    const char *keylocation);
+int dsl_crypto_can_set_keylocation(const char *dsname, const char *keylocation);
 
 void spa_keystore_init(spa_keystore_t *sk);
 void spa_keystore_fini(spa_keystore_t *sk);
