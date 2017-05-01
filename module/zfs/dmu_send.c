@@ -2830,13 +2830,14 @@ receive_object_range(struct receive_writer_arg *rwa,
 		return (ret);
 	}
 
-	ret = dmu_buf_hold_by_dnode(mdn, offset, FTAG, &db, DMU_READ_PREFETCH);
+	ret = dmu_buf_hold_by_dnode(mdn, offset, FTAG, &db,
+	    DMU_READ_PREFETCH | DMU_READ_NO_DECRYPT);
 	if (ret != 0) {
 		dmu_tx_commit(tx);
 		return (ret);
 	}
 
-	dmu_buf_will_dirty(db, tx);
+	dmu_buf_will_change_crypt_params(db, tx);
 	dmu_convert_to_raw(db, byteorder, drror->drr_salt, drror->drr_iv,
 	    drror->drr_mac);
 	dmu_buf_rele(db, FTAG);

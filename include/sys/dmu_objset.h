@@ -125,6 +125,7 @@ struct objset {
 	uint64_t os_flags;
 	uint64_t os_freed_dnodes;
 	boolean_t os_rescan_dnodes;
+	boolean_t os_need_raw; /* os_phys_buf should be written raw next txg */
 
 	/* Protected by os_obj_lock */
 	kmutex_t os_obj_lock;

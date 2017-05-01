@@ -1482,19 +1482,15 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 	dmu_write_policy(os, NULL, 0, 0, &zp);
 
 	/*
-	 * If we are either claiming the ZIL (unauthenticated) or doing a raw
-	 * receive (encrypted) do a raw write. It would be nice to assert that
-	 * we haven't mdofied any fields protected by the objset's MACs, but
-	 * there is currently no mechanism to do so.
+	 * If we are either claiming the ZIL or doing a raw receive write out
+	 * the os_phys_buf raw. Neither of these actions will effect the MAC
+	 * at this point.
 	 */
-	if (arc_is_unauthenticated(os->os_phys_buf) ||
-	    arc_is_encrypted(os->os_phys_buf)) {
-		if (arc_is_unauthenticated(os->os_phys_buf)) {
-			arc_convert_to_raw(os->os_phys_buf,
-			    os->os_dsl_dataset->ds_object, ZFS_HOST_BYTEORDER,
-			    DMU_OT_OBJSET, NULL, NULL, NULL);
-		}
-
+	if (arc_is_unauthenticated(os->os_phys_buf) || os->os_need_raw) {
+		os->os_need_raw = B_FALSE;
+		arc_convert_to_raw(os->os_phys_buf,
+		    os->os_dsl_dataset->ds_object, ZFS_HOST_BYTEORDER,
+		    DMU_OT_OBJSET, NULL, NULL, NULL);
 		dmu_write_policy_override_encrypt(&zp, DMU_OT_OBJSET,
 		    ZFS_HOST_BYTEORDER, ZIO_COMPRESS_OFF, NULL, NULL, NULL);
 	}

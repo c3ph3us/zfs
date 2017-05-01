@@ -1944,11 +1944,10 @@ dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	return (B_FALSE);
 }
 
-void
-dmu_buf_will_dirty(dmu_buf_t *db_fake, dmu_tx_t *tx)
+static void
+dmu_buf_will_dirty_impl(dmu_buf_t *db_fake, int flags, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
-	int rf = DB_RF_MUST_SUCCEED | DB_RF_NOPREFETCH;
 	dbuf_dirty_record_t *dr;
 
 	ASSERT(tx->tx_txg != 0);
@@ -1980,10 +1979,28 @@ dmu_buf_will_dirty(dmu_buf_t *db_fake, dmu_tx_t *tx)
 
 	DB_DNODE_ENTER(db);
 	if (RW_WRITE_HELD(&DB_DNODE(db)->dn_struct_rwlock))
-		rf |= DB_RF_HAVESTRUCT;
+		flags |= DB_RF_HAVESTRUCT;
 	DB_DNODE_EXIT(db);
-	(void) dbuf_read(db, NULL, rf);
+	(void) dbuf_read(db, NULL, flags);
 	(void) dbuf_dirty(db, tx);
+}
+
+void
+dmu_buf_will_dirty(dmu_buf_t *db_fake, dmu_tx_t *tx)
+{
+	dmu_buf_will_dirty_impl(db_fake,
+	    DB_RF_MUST_SUCCEED | DB_RF_NOPREFETCH, tx);
+}
+
+/*
+ * This function is effectively the same as dmu_buf_will_dirty(), but
+ * indicates the caller expects raw encrypted data in the db.
+ */
+void
+dmu_buf_will_change_crypt_params(dmu_buf_t *db_fake, dmu_tx_t *tx)
+{
+	dmu_buf_will_dirty_impl(db_fake,
+	    DB_RF_MUST_SUCCEED | DB_RF_NOPREFETCH | DB_RF_NO_DECRYPT, tx);
 }
 
 void
@@ -3876,6 +3893,7 @@ EXPORT_SYMBOL(dbuf_free_range);
 EXPORT_SYMBOL(dbuf_new_size);
 EXPORT_SYMBOL(dbuf_release_bp);
 EXPORT_SYMBOL(dbuf_dirty);
+EXPORT_SYMBOL(dmu_buf_will_change_crypt_params);
 EXPORT_SYMBOL(dmu_buf_will_dirty);
 EXPORT_SYMBOL(dmu_buf_will_not_fill);
 EXPORT_SYMBOL(dmu_buf_will_fill);

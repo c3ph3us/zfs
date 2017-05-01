@@ -1830,15 +1830,10 @@ dsl_crypto_recv_key_check(void *arg, dmu_tx_t *tx)
 	uint64_t intval, guid, nlevels, blksz, ibs, nblkptr;
 	boolean_t is_passphrase = B_FALSE;
 
-	/*
-	 * Check that the ds exists. Assert that it isn't already encrypted
-	 * and that it is inconsistent for sanity.
-	 */
 	ret = dsl_dataset_hold_obj(tx->tx_pool, dcrka->dcrka_dsobj, FTAG, &ds);
 	if (ret != 0)
 		goto error;
 
-	ASSERT0(ds->ds_dir->dd_crypto_obj);
 	ASSERT(dsl_dataset_phys(ds)->ds_flags & DS_FLAG_INCONSISTENT);
 
 	/*
@@ -2018,7 +2013,7 @@ dsl_crypto_recv_key_sync(void *arg, dmu_tx_t *tx)
 	dnode_t *mdn;
 	uint8_t *keydata, *hmac_keydata, *iv, *mac, *portable_mac;
 	uint_t len;
-	uint64_t rddobj;
+	uint64_t rddobj, one = 1;
 	uint64_t crypt, guid, keyformat, iters, salt;
 	uint64_t compress, checksum, nlevels, blksz, ibs;
 
@@ -2059,20 +2054,20 @@ dsl_crypto_recv_key_sync(void *arg, dmu_tx_t *tx)
 	rrw_exit(&ds->ds_bp_rwlock, FTAG);
 
 	/*
-	 * Set the portable MAC. Convert objset_phys_buf to raw so that the
-	 * zio code won't try to recalculate the MACs.
+	 * Set the portable MAC. The local MAC will always be zero since the
+	 * incoming data will all be portable and user accounting will be
+	 * deferred iuntil the next mount. Afterwards, flag the os to be
+	 * written out raw next time.
 	 */
+	arc_release(os->os_phys_buf, &os->os_phys_buf);
 	bcopy(portable_mac, os->os_phys->os_portable_mac, ZIO_OBJSET_MAC_LEN);
 	bzero(os->os_phys->os_local_mac, ZIO_OBJSET_MAC_LEN);
-	arc_convert_to_raw(os->os_phys_buf, dsobj, ZFS_HOST_BYTEORDER,
-	    DMU_OT_OBJSET, NULL, NULL, NULL);
-
-	dsl_dataset_dirty(ds, tx);
+	os->os_need_raw = B_TRUE;
 
 	/* set metadnode compression and checksum */
 	mdn->dn_compress = compress;
 	mdn->dn_checksum = checksum;
-	dnode_setdirty(mdn, tx);
+	dsl_dataset_dirty(ds, tx);
 
 	/* if this is a new dataset setup the DSL Crypto Key. */
 	if (ds->ds_dir->dd_crypto_obj == 0) {
@@ -2083,6 +2078,9 @@ dsl_crypto_recv_key_sync(void *arg, dmu_tx_t *tx)
 		/* create the DSL Crypto Key on disk and activate the feature */
 		ds->ds_dir->dd_crypto_obj = zap_create(mos,
 		    DMU_OTN_ZAP_METADATA, DMU_OT_NONE, 0, tx);
+		VERIFY0(zap_update(tx->tx_pool->dp_meta_objset,
+		    ds->ds_dir->dd_crypto_obj, DSL_CRYPTO_KEY_REFCOUNT,
+		    sizeof (uint64_t), 1, &one, tx));
 
 		dsl_dataset_activate_feature(dsobj, SPA_FEATURE_ENCRYPTION, tx);
 		ds->ds_feature_inuse[SPA_FEATURE_ENCRYPTION] = B_TRUE;

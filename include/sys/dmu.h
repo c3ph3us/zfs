@@ -692,6 +692,7 @@ struct blkptr *dmu_buf_get_blkptr(dmu_buf_t *db);
  * (ie. you've called dmu_tx_hold_object(tx, db->db_object)).
  */
 void dmu_buf_will_dirty(dmu_buf_t *db, dmu_tx_t *tx);
+void dmu_buf_will_change_crypt_params(dmu_buf_t *db, dmu_tx_t *tx);
 
 /*
  * You must create a transaction, then hold the objects which you will

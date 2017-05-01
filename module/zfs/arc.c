@@ -3523,8 +3523,6 @@ arc_convert_to_raw(arc_buf_t *buf, uint64_t dsobj, boolean_t byteorder,
 	ASSERT(ot == DMU_OT_DNODE || ot == DMU_OT_OBJSET);
 	ASSERT(HDR_HAS_L1HDR(hdr));
 	ASSERT3P(hdr->b_l1hdr.b_state, ==, arc_anon);
-	ASSERT0(ARC_BUF_ENCRYPTED(buf));
-	ASSERT0(ARC_BUF_COMPRESSED(buf));
 
 	buf->b_flags |= (ARC_BUF_FLAG_COMPRESSED | ARC_BUF_FLAG_ENCRYPTED);
 	if (!HDR_PROTECTED(hdr))
@@ -6497,8 +6495,8 @@ arc_release(arc_buf_t *buf, void *tag)
 		hdr->b_l1hdr.b_l2_hits = 0;
 		arc_change_state(arc_anon, hdr, hash_lock);
 		hdr->b_l1hdr.b_arc_access = 0;
-		mutex_exit(hash_lock);
 
+		mutex_exit(hash_lock);
 		buf_discard_identity(hdr);
 		arc_buf_thaw(buf);
 	}

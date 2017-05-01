@@ -1507,6 +1507,11 @@ dmu_convert_to_raw(dmu_buf_t *handle, boolean_t byteorder, const uint8_t *salt,
 	type = DB_DNODE(db)->dn_type;
 	DB_DNODE_EXIT(db);
 
+	/*
+	 * XXX: This technically violates the assumption the dmu code makes
+	 * that dnode blocks are only released in syncing context.
+	 */
+	(void) arc_release(db->db_buf, db);
 	arc_convert_to_raw(db->db_buf, dsobj, byteorder, type, salt, iv, mac);
 }
 
