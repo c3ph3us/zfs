@@ -3531,6 +3531,8 @@ arc_convert_to_raw(arc_buf_t *buf, uint64_t dsobj, boolean_t byteorder,
 	hdr->b_crypt_hdr.b_ot = ot;
 	hdr->b_l1hdr.b_byteswap = (byteorder == ZFS_HOST_BYTEORDER) ?
 	    DMU_BSWAP_NUMFUNCS : DMU_OT_BYTESWAP(ot);
+	if (!arc_hdr_has_uncompressed_buf(hdr))
+		arc_cksum_free(hdr);
 
 	if (salt != NULL)
 		bcopy(salt, hdr->b_crypt_hdr.b_salt, ZIO_DATA_SALT_LEN);
@@ -6453,6 +6455,10 @@ arc_release(arc_buf_t *buf, void *tag)
 		arc_cksum_verify(buf);
 		arc_buf_unwatch(buf);
 
+		/* if this is the last uncompressed buf free the checksum */
+		if (!arc_hdr_has_uncompressed_buf(hdr))
+			arc_cksum_free(hdr);
+
 		mutex_exit(hash_lock);
 
 		/*
@@ -6571,7 +6577,6 @@ arc_write_ready(zio_t *zio)
 	if (HDR_IO_IN_PROGRESS(hdr))
 		ASSERT(zio->io_flags & ZIO_FLAG_REEXECUTED);
 
-	arc_cksum_compute(buf);
 	arc_hdr_set_flags(hdr, ARC_FLAG_IO_IN_PROGRESS);
 
 	if (BP_IS_PROTECTED(bp) != !!HDR_PROTECTED(hdr))
@@ -6596,11 +6601,12 @@ arc_write_ready(zio_t *zio)
 	if (BP_IS_AUTHENTICATED(bp) && ARC_BUF_ENCRYPTED(buf)) {
 		arc_hdr_set_flags(hdr, ARC_FLAG_NOAUTH);
 		buf->b_flags &= ~ARC_BUF_FLAG_ENCRYPTED;
-		if (BP_GET_COMPRESS(bp) == ZIO_COMPRESS_OFF) {
+		if (BP_GET_COMPRESS(bp) == ZIO_COMPRESS_OFF)
 			buf->b_flags &= ~ARC_BUF_FLAG_COMPRESSED;
-			arc_cksum_compute(buf);
-		}
 	}
+
+	/* this must be done after the buffer flags are adjusted */
+	arc_cksum_compute(buf);
 
 	if (BP_IS_HOLE(bp) || BP_IS_EMBEDDED(bp)) {
 		compress = ZIO_COMPRESS_OFF;
