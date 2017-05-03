@@ -1408,7 +1408,7 @@ spa_keystore_change_key_sync(void *arg, dmu_tx_t *tx)
 			wkey = dcp->cp_wkey;
 			wkey->wk_ddobj = ds->ds_dir->dd_object;
 		} else {
-			keylocation = "none";
+			keylocation = "prompt";
 		}
 
 		if (keylocation != NULL) {
@@ -2016,6 +2016,7 @@ dsl_crypto_recv_key_sync(void *arg, dmu_tx_t *tx)
 	uint64_t rddobj, one = 1;
 	uint64_t crypt, guid, keyformat, iters, salt;
 	uint64_t compress, checksum, nlevels, blksz, ibs;
+	char *keylocation = "prompt";
 
 	VERIFY0(dsl_dataset_hold_obj(dp, dsobj, FTAG, &ds));
 	VERIFY0(dmu_objset_from_ds(ds, &os));
@@ -2089,6 +2090,16 @@ dsl_crypto_recv_key_sync(void *arg, dmu_tx_t *tx)
 		VERIFY0(zap_add(mos, ds->ds_dir->dd_object,
 		    DD_FIELD_CRYPTO_KEY_OBJ, sizeof (uint64_t), 1,
 		    &ds->ds_dir->dd_crypto_obj, tx));
+
+		/*
+		 * Set the keylocation to prompt by default. If keylocation
+		 * has been provided via the properties, this will be overriden
+		 * later.
+		 */
+		dsl_prop_set_sync_impl(ds,
+		    zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
+		    ZPROP_SRC_LOCAL, 1, strlen(keylocation) + 1,
+		    keylocation, tx);
 
 		rddobj = ds->ds_dir->dd_object;
 	} else {
