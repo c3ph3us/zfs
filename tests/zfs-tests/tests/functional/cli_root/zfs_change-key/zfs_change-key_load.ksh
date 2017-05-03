@@ -38,21 +38,21 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
+		log_must zfs destroy $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
 log_assert "'zfs change-key -l' should load a dataset's key to change it"
 
-log_must eval "$ECHO $PASSPHRASE > /$TESTPOOL/pkey"
-log_must $ZFS create -o encryption=on -o keyformat=passphrase \
+log_must eval "echo $PASSPHRASE > /$TESTPOOL/pkey"
+log_must zfs create -o encryption=on -o keyformat=passphrase \
 	-o keylocation=file:///$TESTPOOL/pkey $TESTPOOL/$TESTFS1
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
 
-log_must $ZFS change-key -l $TESTPOOL/$TESTFS1
+log_must zfs change-key -l $TESTPOOL/$TESTFS1
 log_must key_available $TESTPOOL/$TESTFS1
 
-log_must $ZFS change-key -l $TESTPOOL/$TESTFS1
+log_must zfs change-key -l $TESTPOOL/$TESTFS1
 
 log_pass "'zfs change-key -l' loads a dataset's key to change it"

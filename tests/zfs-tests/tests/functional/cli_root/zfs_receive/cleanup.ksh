@@ -30,4 +30,5 @@
 poolexists $TESTPOOL1 && \
 	destroy_pool $TESTPOOL1
 
+log_must pkill -9 rngd
 default_cleanup

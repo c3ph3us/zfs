@@ -64,4 +64,5 @@ case $DISK_COUNT in
 	;;
 esac
 
+log_must pkill -9 rngd
 log_pass

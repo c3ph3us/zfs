@@ -40,23 +40,23 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
+		log_must zfs destroy $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
 log_assert "'zfs change-key' should change the key material"
 
-log_must eval "$ECHO $PASSPHRASE1 | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE1 | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS1"
-log_must eval "$ECHO $PASSPHRASE2 | $ZFS change-key $TESTPOOL/$TESTFS1"
+log_must eval "echo $PASSPHRASE2 | zfs change-key $TESTPOOL/$TESTFS1"
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
 
-log_mustnot eval "$ECHO $PASSPHRASE1 | $ZFS load-key $TESTPOOL/$TESTFS1"
+log_mustnot eval "echo $PASSPHRASE1 | zfs load-key $TESTPOOL/$TESTFS1"
 log_must key_unavailable $TESTPOOL/$TESTFS1
 
-log_must eval "$ECHO $PASSPHRASE2 | $ZFS load-key $TESTPOOL/$TESTFS1"
+log_must eval "echo $PASSPHRASE2 | zfs load-key $TESTPOOL/$TESTFS1"
 log_must key_available $TESTPOOL/$TESTFS1
 
 log_pass "'zfs change-key' changes the key material"

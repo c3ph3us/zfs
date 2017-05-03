@@ -36,16 +36,16 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS2 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS2
+		log_must zfs destroy $TESTPOOL/$TESTFS2
 }
 log_onexit cleanup
 
 log_assert "'zfs rename' should not rename an unencrypted dataset to a" \
 	"child of an encrypted dataset"
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS2"
-log_mustnot $ZFS rename $TESTPOOL/$TESTFS $TESTPOOL/$TESTFS2/$TESTFS
+log_mustnot zfs rename $TESTPOOL/$TESTFS $TESTPOOL/$TESTFS2/$TESTFS
 
 log_pass "'zfs rename' does not rename an unencrypted dataset to a child" \
 	"of an encrypted dataset"

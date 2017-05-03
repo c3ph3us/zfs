@@ -39,28 +39,28 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy -r $TESTPOOL/$TESTFS1
+		log_must zfs destroy -r $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
 log_assert "'zfs load-key -r' should recursively load keys"
 
-log_must eval "$ECHO $PASSPHRASE1 > /$TESTPOOL/pkey"
-log_must $ZFS create -o encryption=on -o keyformat=passphrase \
+log_must eval "echo $PASSPHRASE1 > /$TESTPOOL/pkey"
+log_must zfs create -o encryption=on -o keyformat=passphrase \
 	-o keylocation=file:///$TESTPOOL/pkey $TESTPOOL/$TESTFS1
 
-log_must $ZFS create -o keyformat=passphrase \
+log_must zfs create -o keyformat=passphrase \
 	-o keylocation=file:///$TESTPOOL/pkey $TESTPOOL/$TESTFS1/child
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1/child
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1/child
+log_must zfs unload-key $TESTPOOL/$TESTFS1
 
-log_must $ZFS load-key -r $TESTPOOL
+log_must zfs load-key -r $TESTPOOL
 log_must key_available $TESTPOOL/$TESTFS1
 log_must key_available $TESTPOOL/$TESTFS1/child
 
-log_must $ZFS mount $TESTPOOL/$TESTFS1
-log_must $ZFS mount $TESTPOOL/$TESTFS1/child
+log_must zfs mount $TESTPOOL/$TESTFS1
+log_must zfs mount $TESTPOOL/$TESTFS1/child
 
 log_pass "'zfs load-key -r' recursively loads keys"

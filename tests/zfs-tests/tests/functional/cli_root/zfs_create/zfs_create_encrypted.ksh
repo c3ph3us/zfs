@@ -70,9 +70,9 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy -r $TESTPOOL/$TESTFS1
+		log_must zfs destroy -r $TESTPOOL/$TESTFS1
 	datasetexists $TESTPOOL/$TESTFS2 && \
-		log_must $ZFS destroy -r $TESTPOOL/$TESTFS2
+		log_must zfs destroy -r $TESTPOOL/$TESTFS2
 }
 log_onexit cleanup
 
@@ -80,54 +80,54 @@ log_assert "ZFS should create datasets only if they have a valid" \
 	"combination of encryption properties set."
 
 # Unencrypted parent
-log_must $ZFS create $TESTPOOL/$TESTFS1
-log_mustnot $ZFS create -o keyformat=passphrase $TESTPOOL/$TESTFS1/c1
-log_mustnot $ZFS create -o keylocation=prompt $TESTPOOL/$TESTFS1/c1
-log_mustnot $ZFS create -o keyformat=passphrase -o keylocation=prompt \
+log_must zfs create $TESTPOOL/$TESTFS1
+log_mustnot zfs create -o keyformat=passphrase $TESTPOOL/$TESTFS1/c1
+log_mustnot zfs create -o keylocation=prompt $TESTPOOL/$TESTFS1/c1
+log_mustnot zfs create -o keyformat=passphrase -o keylocation=prompt \
 	$TESTPOOL/$TESTFS1/c1
 
-log_must $ZFS create -o encryption=off $TESTPOOL/$TESTFS1/c1
-log_mustnot $ZFS create -o encryption=off -o keylocation=prompt \
+log_must zfs create -o encryption=off $TESTPOOL/$TESTFS1/c1
+log_mustnot zfs create -o encryption=off -o keylocation=prompt \
 	$TESTPOOL/$TESTFS1/c2
-log_mustnot $ZFS create -o encryption=off -o keyformat=passphrase \
+log_mustnot zfs create -o encryption=off -o keyformat=passphrase \
 	$TESTPOOL/$TESTFS1/c2
-log_mustnot $ZFS create -o encryption=off -o keyformat=passphrase \
+log_mustnot zfs create -o encryption=off -o keyformat=passphrase \
 	-o keylocation=prompt $TESTPOOL/$TESTFS1/c2
 
-log_mustnot $ZFS create -o encryption=on $TESTPOOL/$TESTFS1/c2
-log_mustnot $ZFS create -o encryption=on -o keylocation=prompt \
+log_mustnot zfs create -o encryption=on $TESTPOOL/$TESTFS1/c2
+log_mustnot zfs create -o encryption=on -o keylocation=prompt \
 	$TESTPOOL/$TESTFS1/c2
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase $TESTPOOL/$TESTFS1/c3"
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS1/c4"
 
 # Encrypted parent
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase $TESTPOOL/$TESTFS2"
 
-log_must $ZFS create $TESTPOOL/$TESTFS2/c1
-log_mustnot $ZFS create -o keylocation=prompt $TESTPOOL/$TESTFS2/c2
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o keyformat=passphrase" \
+log_must zfs create $TESTPOOL/$TESTFS2/c1
+log_mustnot zfs create -o keylocation=prompt $TESTPOOL/$TESTFS2/c2
+log_must eval "echo $PASSPHRASE | zfs create -o keyformat=passphrase" \
 	"$TESTPOOL/$TESTFS2/c3"
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o keyformat=passphrase" \
+log_must eval "echo $PASSPHRASE | zfs create -o keyformat=passphrase" \
 	"-o keylocation=prompt $TESTPOOL/$TESTFS2/c4"
 
-log_mustnot $ZFS create -o encryption=off $TESTPOOL/$TESTFS2/c5
-log_mustnot $ZFS create -o encryption=off -o keylocation=prompt \
+log_mustnot zfs create -o encryption=off $TESTPOOL/$TESTFS2/c5
+log_mustnot zfs create -o encryption=off -o keylocation=prompt \
 	$TESTPOOL/$TESTFS2/c5
-log_mustnot $ZFS create -o encryption=off -o keyformat=passphrase \
+log_mustnot zfs create -o encryption=off -o keyformat=passphrase \
 	$TESTPOOL/$TESTFS2/c5
-log_mustnot $ZFS create -o encryption=off -o keyformat=passphrase \
+log_mustnot zfs create -o encryption=off -o keyformat=passphrase \
 	-o keylocation=prompt $TESTPOOL/$TESTFS2/c5
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"$TESTPOOL/$TESTFS2/c5"
-log_mustnot $ZFS create -o encryption=on -o keylocation=prompt \
+log_mustnot zfs create -o encryption=on -o keylocation=prompt \
 	$TESTPOOL/$TESTFS2/c6
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase $TESTPOOL/$TESTFS2/c6"
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS2/c7"
 
 log_pass "ZFS creates datasets only if they have a valid combination of" \

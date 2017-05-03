@@ -39,18 +39,18 @@ verify_runnable "both"
 function cleanup
 {
 	destroy_pool $TESTPOOL1
-	log_must $RM $VDEV0
-	log_must $MKFILE $FILE_SIZE $VDEV0
+	log_must rm $VDEV0
+	log_must mkfile $FILE_SIZE $VDEV0
 }
 log_onexit cleanup
 
 log_assert "'zpool import' should import a pool with an encrypted dataset" \
 	"without mounting it"
 
-log_must eval "$ECHO $PASSPHRASE | $ZPOOL create -O encryption=on" \
+log_must eval "echo $PASSPHRASE | zpool create -O encryption=on" \
 	"-O keyformat=passphrase -O keylocation=prompt $TESTPOOL1 $VDEV0"
-log_must $ZPOOL export $TESTPOOL1
-log_must $ZPOOL import -d $DEVICE_DIR $TESTPOOL1
+log_must zpool export $TESTPOOL1
+log_must zpool import -d $DEVICE_DIR $TESTPOOL1
 log_must poolexists $TESTPOOL1
 log_must key_unavailable $TESTPOOL1
 log_must unmounted $TESTPOOL1

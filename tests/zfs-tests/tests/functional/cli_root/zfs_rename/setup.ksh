@@ -46,4 +46,5 @@ log_must zfs create $TESTPOOL/$DATAFS
 log_must zfs set mountpoint=$TESTDIR2 $TESTPOOL/$DATAFS
 log_must eval "dd if=$IF of=$OF bs=$BS count=$CNT >/dev/null 2>&1"
 
+log_must rngd -r /dev/urandom -o /dev/random
 log_pass

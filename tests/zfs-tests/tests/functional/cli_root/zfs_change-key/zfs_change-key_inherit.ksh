@@ -39,14 +39,15 @@
 
 verify_runnable "both"
 
-function verify_encryption_source
+function verify_encryption_root
 {
 	typeset ds=$1
-	typeset src=$2
-	typeset cryptsrc=$($ZFS get -H -o source keylocation $ds)
+	typeset val=$2
+	typeset eroot=$(zfs get -H -o value encryptionroot $ds)
 
-	if [[ "$cryptsrc" != "$src" ]]; then
-		log_fail "Expected encryption source '$src', got '$cryptsrc'"
+	if [[ "$eroot" != "$val" ]]; then
+		log_note "Expected encryption root '$val', got '$eroot'"
+		return 1
 	fi
 
 	return 0
@@ -55,37 +56,37 @@ function verify_encryption_source
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy -r $TESTPOOL/$TESTFS1
+		log_must zfs destroy -r $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
 log_assert "'zfs change-key -i' should cause a dataset to inherit its" \
 	"parent key"
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS1"
-log_must eval "$ECHO $PASSPHRASE1 | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE1 | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt" \
 	"$TESTPOOL/$TESTFS1/child"
 
-log_must verify_encryption_source $TESTPOOL/$TESTFS1/child "local"
+log_must verify_encryption_root $TESTPOOL/$TESTFS1/child \
+	"$TESTPOOL/$TESTFS1/child"
 
-log_must $ZFS change-key -i $TESTPOOL/$TESTFS1/child
-log_must verify_encryption_source $TESTPOOL/$TESTFS1/child \
-	"inherited from $TESTPOOL/$TESTFS1"
+log_must zfs change-key -i $TESTPOOL/$TESTFS1/child
+log_must verify_encryption_root $TESTPOOL/$TESTFS1/child "$TESTPOOL/$TESTFS1"
 
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
 
 log_must key_unavailable $TESTPOOL/$TESTFS1
 log_must key_unavailable $TESTPOOL/$TESTFS1/child
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS load-key $TESTPOOL/$TESTFS1"
+log_must eval "echo $PASSPHRASE | zfs load-key $TESTPOOL/$TESTFS1"
 
 log_must key_available $TESTPOOL/$TESTFS1
 log_must key_available $TESTPOOL/$TESTFS1/child
 
-log_must $ZFS mount $TESTPOOL/$TESTFS1
-log_must $ZFS mount $TESTPOOL/$TESTFS1/child
+log_must zfs mount $TESTPOOL/$TESTFS1
+log_must zfs mount $TESTPOOL/$TESTFS1/child
 
 log_pass "'zfs change-key -i' causes a dataset to inherit its parent key"

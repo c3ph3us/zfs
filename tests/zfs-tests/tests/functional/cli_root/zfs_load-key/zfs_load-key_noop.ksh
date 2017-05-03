@@ -37,18 +37,18 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
+		log_must zfs destroy $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
 log_assert "'zfs load-key -n' should load the key for a loaded dataset"
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS1"
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS load-key -n $TESTPOOL/$TESTFS1"
+log_must eval "echo $PASSPHRASE | zfs load-key -n $TESTPOOL/$TESTFS1"
 log_must key_available $TESTPOOL/$TESTFS1
 
-log_mustnot eval "$ECHO $PASSPHRASE1 | $ZFS load-key -n $TESTPOOL/$TESTFS1"
+log_mustnot eval "echo $PASSPHRASE1 | zfs load-key -n $TESTPOOL/$TESTFS1"
 
 log_pass "'zfs load-key -n' loads the key for a loaded dataset"

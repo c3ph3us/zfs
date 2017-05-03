@@ -55,30 +55,30 @@ function verify_keyformat
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \
-		log_must $ZFS destroy $TESTPOOL/$TESTFS1
+		log_must zfs destroy $TESTPOOL/$TESTFS1
 }
 log_onexit cleanup
 
 log_assert "'zfs change-key -o' should change the key format"
 
-log_must eval "$ECHO $PASSPHRASE | $ZFS create -o encryption=on" \
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
 	"-o keyformat=passphrase -o keylocation=prompt $TESTPOOL/$TESTFS1"
-log_must $ZFS unmount $TESTPOOL/$TESTFS1
+log_must zfs unmount $TESTPOOL/$TESTFS1
 
 log_must verify_keyformat $TESTPOOL/$TESTFS1 "passphrase"
 
-log_must eval "$ECHO $HEXKEY | $ZFS change-key -o keyformat=hex" \
+log_must eval "echo $HEXKEY | zfs change-key -o keyformat=hex" \
 	"$TESTPOOL/$TESTFS1"
 log_must verify_keyformat $TESTPOOL/$TESTFS1 "hex"
 
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
-log_must eval "$ECHO $HEXKEY | $ZFS load-key $TESTPOOL/$TESTFS1"
+log_must zfs unload-key $TESTPOOL/$TESTFS1
+log_must eval "echo $HEXKEY | zfs load-key $TESTPOOL/$TESTFS1"
 
-log_must eval "$ECHO $RAWKEY | $ZFS change-key -o keyformat=raw" \
+log_must eval "echo $RAWKEY | zfs change-key -o keyformat=raw" \
 	"$TESTPOOL/$TESTFS1"
 log_must verify_keyformat $TESTPOOL/$TESTFS1 "raw"
 
-log_must $ZFS unload-key $TESTPOOL/$TESTFS1
-log_must eval "$ECHO $RAWKEY | $ZFS load-key $TESTPOOL/$TESTFS1"
+log_must zfs unload-key $TESTPOOL/$TESTFS1
+log_must eval "echo $RAWKEY | zfs load-key $TESTPOOL/$TESTFS1"
 
 log_pass "'zfs change-key -o' changes the key format"
