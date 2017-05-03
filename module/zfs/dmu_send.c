@@ -2435,6 +2435,7 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 
 	tx = dmu_tx_create(rwa->os);
 	dmu_tx_hold_bonus(tx, object);
+	dmu_tx_hold_write(tx, object, 0, 0);
 	err = dmu_tx_assign(tx, TXG_WAIT);
 	if (err != 0) {
 		dmu_tx_abort(tx);
