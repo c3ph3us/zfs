@@ -160,8 +160,7 @@ tests = ['zfs_receive_001_pos', 'zfs_receive_002_pos', 'zfs_receive_003_pos',
     'zfs_receive_010_pos', 'zfs_receive_011_pos', 'zfs_receive_012_pos',
     'zfs_receive_013_pos', 'zfs_receive_014_pos', 'zfs_receive_015_pos',
     'zfs_receive_from_encrypted', 'zfs_receive_to_encrypted',
-    'zfs_receive_raw', 'zfs_receive_raw_incremental',
-    'zfs_receive_raw_replication']
+    'zfs_receive_raw', 'zfs_receive_raw_incremental']
 
 # DISABLED:
 # zfs_rename_006_pos - https://github.com/zfsonlinux/zfs/issues/5647
