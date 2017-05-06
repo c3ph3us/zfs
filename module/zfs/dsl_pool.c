@@ -410,7 +410,7 @@ dsl_pool_create(spa_t *spa, nvlist_t *zplprops, dsl_crypto_params_t *dcp,
 		dsl_pool_create_origin(dp, tx);
 
 	/*
-	 * some features can get enabled when creating the root dataset, so we
+	 * Some features may be needed when creating the root dataset, so we
 	 * create the feature objects here.
 	 */
 	if (spa_version(spa) >= SPA_VERSION_FEATURES)

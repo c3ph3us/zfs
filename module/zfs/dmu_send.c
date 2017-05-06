@@ -327,7 +327,7 @@ dump_write(dmu_sendarg_t *dsp, dmu_object_type_t type, uint64_t object,
 			ASSERT(BP_IS_PROTECTED(bp));
 
 			/*
-			 * This is a raw encrypted block so we set the encrypted
+			 * This is a raw protected block so we set the encrypted
 			 * flag. We need to pass along everything the receiving
 			 * side will need to interpret this block, including the
 			 * byteswap, salt, IV, and MAC.
@@ -650,6 +650,7 @@ send_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 
 	ASSERT(zb->zb_object == DMU_META_DNODE_OBJECT ||
 	    zb->zb_object >= sta->resume.zb_object);
+	ASSERT3P(sta->ds, !=, NULL);
 
 	if (sta->cancel)
 		return (SET_ERROR(EINTR));
@@ -724,6 +725,18 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 
 	ASSERT(zb->zb_object == DMU_META_DNODE_OBJECT ||
 	    zb->zb_object >= dsa->dsa_resume_object);
+
+	/*
+	 * All bps of an encrypted os should have the encryption bit set.
+	 * If this is not true it indicates tampering and we report an error.
+	 */
+	if (dsa->dsa_os->os_encrypted &&
+	    !BP_IS_HOLE(bp) && !BP_USES_CRYPT(bp)) {
+		spa_log_error(spa, zb);
+		zfs_panic_recover("unencrypted block in encrypted "
+		    "object set %llu", ds->ds_object);
+		return (SET_ERROR(EIO));
+	}
 
 	if (zb->zb_object != DMU_META_DNODE_OBJECT &&
 	    DMU_OBJECT_IS_SPECIAL(zb->zb_object)) {
@@ -832,10 +845,9 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 		    !BP_IS_EMBEDDED(bp) && !DMU_OT_IS_METADATA(BP_GET_TYPE(bp));
 
 		/*
-		 * Raw sends only apply to encrypted data. Unencrypted metadata
-		 * in an encrypted dataset is sent normally. Raw sends are
-		 * mutually exclusive with splitting large blocks and compressed
-		 * sends, so we assert that here.
+		 * Raw sends only apply to protected blocks. Raw sends are
+		 * mutually exclusive with splitting large blocks and
+		 * compressed sends, so we assert that here.
 		 */
 		boolean_t request_raw =
 		    (dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) != 0;
@@ -1636,13 +1648,6 @@ dmu_recv_begin_check(void *arg, dmu_tx_t *tx)
 		/* raw receives require the encryption feature */
 		if (!spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_ENCRYPTION))
 			return (SET_ERROR(ENOTSUP));
-
-		/*
-		 * Raw receives cannot specify an origin snapshot because we
-		 * cannot ensure the keys match.
-		 */
-		if (drba->drba_origin != NULL)
-			return (SET_ERROR(EINVAL));
 	} else {
 		dsflags |= DS_HOLD_FLAG_DECRYPT;
 	}
@@ -1747,6 +1752,7 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 	const char *tofs = drba->drba_cookie->drc_tofs;
 	uint64_t featureflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
 	dsl_dataset_t *ds, *newds;
+	objset_t *os;
 	uint64_t dsobj;
 	ds_hold_flags_t dsflags = 0;
 	int error;
@@ -1803,6 +1809,8 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 		drba->drba_cookie->drc_newfs = B_TRUE;
 	}
 	VERIFY0(dsl_dataset_own_obj(dp, dsobj, dsflags, dmu_recv_tag, &newds));
+	VERIFY0(dmu_objset_from_ds(newds, &os));
+	os->os_receiving = B_TRUE;
 
 	if (drba->drba_cookie->drc_resumable) {
 		uint64_t one = 1;
@@ -1847,8 +1855,6 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 	 * until dmu_recv_stream(), so we set the value manually for now.
 	 */
 	if (featureflags & DMU_BACKUP_FEATURE_RAW) {
-		objset_t *os;
-		VERIFY0(dmu_objset_from_ds(newds, &os));
 		os->os_encrypted = B_TRUE;
 		drba->drba_cookie->drc_raw = B_TRUE;
 	}
@@ -1997,6 +2003,7 @@ dmu_recv_resume_begin_sync(void *arg, dmu_tx_t *tx)
 	struct drr_begin *drrb = drba->drba_cookie->drc_drrb;
 	uint64_t featureflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
 	dsl_dataset_t *ds;
+	objset_t *os;
 	ds_hold_flags_t dsflags = 0;
 	uint64_t dsobj;
 	/* 6 extra bytes for /%recv */
@@ -2025,6 +2032,8 @@ dmu_recv_resume_begin_sync(void *arg, dmu_tx_t *tx)
 	dsl_dataset_rele_flags(ds, dsflags, FTAG);
 
 	VERIFY0(dsl_dataset_own_obj(dp, dsobj, dsflags, dmu_recv_tag, &ds));
+	VERIFY0(dmu_objset_from_ds(ds, &os));
+	os->os_receiving = B_TRUE;
 
 	dmu_buf_will_dirty(ds->ds_dbuf, tx);
 	dsl_dataset_phys(ds)->ds_flags |= DS_FLAG_INCONSISTENT;
@@ -2863,6 +2872,7 @@ dmu_recv_cleanup_ds(dmu_recv_cookie_t *drc)
 {
 	ds_hold_flags_t dsflags = DS_HOLD_FLAG_DECRYPT;
 
+	drc->drc_ds->ds_objset->os_receiving = B_FALSE;
 	if (drc->drc_resumable) {
 		/* wait for our resume state to be written to disk */
 		txg_wait_synced(drc->drc_ds->ds_dir->dd_pool, 0);
@@ -3655,6 +3665,7 @@ dmu_recv_end_sync(void *arg, dmu_tx_t *tx)
 
 	spa_history_log_internal_ds(drc->drc_ds, "finish receiving",
 	    tx, "snap=%s", drc->drc_tosnap);
+	drc->drc_ds->ds_objset->os_receiving = B_FALSE;
 
 	if (!drc->drc_newfs) {
 		dsl_dataset_t *origin_head;
@@ -3755,7 +3766,6 @@ dmu_recv_end_sync(void *arg, dmu_tx_t *tx)
 	 * pointer, if it exists.
 	 */
 	if (!drc->drc_raw && encrypted) {
-		atomic_dec_32(&drc->drc_ds->ds_key_mappings);
 		(void) spa_keystore_remove_mapping(dmu_tx_pool(tx)->dp_spa,
 		    drc->drc_ds->ds_object, drc->drc_ds);
 	}

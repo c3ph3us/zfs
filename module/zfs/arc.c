@@ -290,6 +290,7 @@
 #include <sys/multilist.h>
 #include <sys/abd.h>
 #include <sys/zil.h>
+#include <sys/fm/fs/zfs.h>
 #ifdef _KERNEL
 #include <sys/vmsystm.h>
 #include <vm/anon.h>
@@ -1001,7 +1002,7 @@ typedef enum arc_fill_flags {
 	ARC_FILL_LOCKED		= 1 << 0, /* hdr lock is held */
 	ARC_FILL_COMPRESSED	= 1 << 1, /* fill with compressed data */
 	ARC_FILL_ENCRYPTED	= 1 << 2, /* fill with encrypted data */
-	ARC_FILL_NOAUTH		= 1 << 3, /* ok if data is not authenticated */
+	ARC_FILL_NOAUTH		= 1 << 3, /* don't attempt to authenticate */
 	ARC_FILL_IN_PLACE	= 1 << 4  /* fill in place (special case) */
 } arc_fill_flags_t;
 
@@ -1913,9 +1914,9 @@ error:
 
 /*
  * This function will take a header that only has raw encrypted data in
- * b_crypt_hdr.b_rabd and decrypts it into a new buffer which is stored in
- * b_l1hdr.b_pabd. If designated in the header, this function will also
- * decompress the data.
+ * b_crypt_hdr.b_rabd and decrypt it into a new buffer which is stored in
+ * b_l1hdr.b_pabd. If designated in the header flags, this function will
+ * also decompress the data.
  */
 static int
 arc_hdr_decrypt(arc_buf_hdr_t *hdr, kmutex_t *hash_lock, spa_t *spa,
@@ -2025,7 +2026,8 @@ error:
 /*
  * This function is used by the dbuf code to decrypt bonus buffers in place.
  * The dbuf code itself doesn't have any locking for decrypting a shared dnode
- * block, so we use the hash lock here to protect against concurrent writes.
+ * block, so we use the hash lock here to protect against concurrent calls to
+ * arc_buf_fill().
  */
 static int
 arc_buf_untransform_in_place(arc_buf_t *buf, kmutex_t *hash_lock)
@@ -2107,7 +2109,7 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, uint64_t dsobj, arc_fill_flags_t flags)
 	/* modify the header to accomodate the request if needed */
 	if (HDR_NOAUTH(hdr) && (flags & ARC_FILL_NOAUTH) == 0) {
 		/*
-		 * The caller requested authenicated data but our data has
+		 * The caller requested authenticated data but our data has
 		 * not been authenticated yet. Verify the MAC now if we can.
 		 */
 		error = arc_hdr_authenticate(hdr, hash_lock, spa, dsobj);
@@ -3444,8 +3446,8 @@ arc_hdr_realloc(arc_buf_hdr_t *hdr, kmem_cache_t *old, kmem_cache_t *new)
 
 /*
  * This function allows an L1 header to be reallocated as a crypt
- * header and vice versa. If going to a crypt header, the new fields
- * will be zeroed out.
+ * header and vice versa. If we are going to a crypt header, the
+ * new fields will be zeroed out.
  */
 static arc_buf_hdr_t *
 arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
@@ -3634,7 +3636,8 @@ arc_alloc_raw_buf(spa_t *spa, void *tag, uint64_t dsobj, boolean_t byteorder,
 
 	/*
 	 * This buffer will be considered encrypted even if the ot is not an
-	 * encrypted type. It will become unencrypted in arc_write_ready().
+	 * encrypted type. It will become authenticated instead in
+	 * arc_write_ready().
 	 */
 	buf = NULL;
 	VERIFY0(arc_buf_alloc_impl(hdr, spa, dsobj, tag, B_TRUE, B_TRUE,
@@ -5710,6 +5713,21 @@ arc_read_done(zio_t *zio)
 		 */
 		ASSERT((zio->io_flags & ZIO_FLAG_SPECULATIVE) ||
 		    error == 0 || error != ENOENT);
+
+		/*
+		 * If we failed to decrypt, report an error now (as the zio
+		 * layer would have done if it had done the transforms).
+		 */
+		if (error == ECKSUM) {
+			ASSERT(BP_IS_PROTECTED(bp));
+			error = SET_ERROR(EIO);
+			spa_log_error(zio->io_spa, &zio->io_bookmark);
+			if ((zio->io_flags & ZIO_FLAG_SPECULATIVE) == 0) {
+				zfs_ereport_post(FM_EREPORT_ZFS_AUTHENTICATION,
+				    zio->io_spa, NULL, &zio->io_bookmark, zio,
+				    0, 0);
+			}
+		}
 
 		if (no_zio_error) {
 			zio->io_error = error;

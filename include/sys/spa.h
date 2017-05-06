@@ -232,7 +232,7 @@ typedef struct zio_cksum_salt {
 
 /*
  * The blkptr_t's of encrypted blocks also need to store the encryption
- * parameters so that the block can be decrypted. TThis layout is as follows:
+ * parameters so that the block can be decrypted. This layout is as follows:
  *
  *	64	56	48	40	32	24	16	8	0
  *	+-------+-------+-------+-------+-------+-------+-------+-------+
@@ -258,54 +258,53 @@ typedef struct zio_cksum_salt {
  *	+-------+-------+-------+-------+-------+-------+-------+-------+
  * a	|			logical birth txg			|
  *	+-------+-------+-------+-------+-------+-------+-------+-------+
- * b	|		IV2		|		fill count	|
+ * b	|		IV2		|	    fill count		|
  *	+-------+-------+-------+-------+-------+-------+-------+-------+
  * c	|			checksum[0]				|
  *	+-------+-------+-------+-------+-------+-------+-------+-------+
  * d	|			checksum[1]				|
  *	+-------+-------+-------+-------+-------+-------+-------+-------+
- * e	|			MAC[1]					|
+ * e	|			MAC[0]					|
  *	+-------+-------+-------+-------+-------+-------+-------+-------+
- * f	|			MAC[2]					|
+ * f	|			MAC[1]					|
  *	+-------+-------+-------+-------+-------+-------+-------+-------+
  *
  * Legend:
  *
- * vdev		virtual device ID
- * offset	offset into virtual device
- * LSIZE	logical size
- * PSIZE	physical size (after compression)
- * ASIZE	allocated size (including RAID-Z parity and gang block headers)
- * salt		First 64 bits of encryption IV
+ * salt		Salt for generating encryption keys
  * IV1		First 64 bits of encryption IV
- * GRID		RAID-Z layout information (reserved for future use)
- * cksum	checksum function
- * comp		compression function
- * G		gang block indicator
- * B		byteorder (endianness)
- * D		dedup
- * X		encryption (set to 1)
+ * X		Block requires encryption handling (set to 1)
  * E		blkptr_t contains embedded data (set to 0, see below)
- * lvl		level of indirection
- * type		DMU object type
- * phys birth	txg of block allocation; zero if same as logical birth txg
- * log. birth	transaction group in which the block was logically born
- * fill count	number of non-zero blocks under this bp
+ * fill count	number of non-zero blocks under this bp (truncated to 32 bits)
  * IV2		Last 32 bits of encryption IV
- * checksum[2]	256-bit checksum of the data this bp describes
- * MAC[2]	message authentication code
+ * checksum[2]	128-bit checksum of the data this bp describes
+ * MAC[2]	128-bit message authentication code for this data
+ *
+ * The X bit being set indicates that this block is one of 3 types. If this is
+ * a level 0 block with an encrypted object type, the block is encrypted
+ * (see BP_IS_ENCRYPTED()). If this is a level 0 block with an unencrypted
+ * object type, this block is authenticated with an HMAC (see
+ * BP_IS_AUTHENTICATED()). Otherwise (if level > 0), this bp will use the MAC
+ * words to store a checksum-of-MACs from the level below (see
+ * BP_HAS_INDIRECT_MAC_CKSUM()). For convenience in the code, BP_IS_PROTECTED()
+ * refers to both encrypted and authenticated blocks and BP_USES_CRYPT()
+ * refers to any of these 3 kinds of blocks.
  *
  * The additional encryption parameters are the salt, IV, and MAC which are
  * explained in greater detail in the block comment at the top of zio_crypt.c.
  * The MAC occupies half of the checksum space since it serves a very similar
  * purpose: to prevent data corruption on disk. The only functional difference
- * is that the MAC provides additional protection against malicious disk
- * tampering. We use the 3rd vdev to store the salt and first 64 bits of the IV.
- * as a result encrypted blocks can only have 2 copies maximum instead of the
- * normal 3. The last 32 bits are stored in the upper bits of what is usually
- * the fill count. Note that only level 0 bocks are ever encrypted (or -2 in
- * the case of ZIL blocks), which allows us to guarantee that these 32 bits
- * are not trampled over by other code (see zio_crypt.c for details).
+ * is that the checksum is used to detect on-disk corruption whether or not the
+ * encryption key is loaded and the MAC provides additional protection against
+ * malicious disk tampering. We use the 3rd DVA to store the salt and first
+ * 64 bits of the IV. As a result encrypted blocks can only have 2 copies
+ * maximum instead of the normal 3. The last 32 bits of the IV are stored in
+ * the upper bits of what is usually the fill count. Note that only blocks with
+ * level < 0 are ever encrypted, which allows us to guarantee that these 32 bits
+ * are not trampled over by other code (see zio_crypt.c for details). The salt
+ * and IV are not used for authenticated bps or bps with an indirect MAC
+ * checksum, so these blocks can utilize all 3 copies and the full 64 bits for
+ * the fill count.
  */
 
 /*
@@ -622,14 +621,15 @@ _NOTE(CONSTCOND) } while (0)
 
 #define	BP_SHOULD_BYTESWAP(bp)	(BP_GET_BYTEORDER(bp) != ZFS_HOST_BYTEORDER)
 
-#define	BP_SPRINTF_LEN	320
+#define	BP_SPRINTF_LEN	400
 
 /*
  * This macro allows code sharing between zfs, libzpool, and mdb.
  * 'func' is either snprintf() or mdb_snprintf().
  * 'ws' (whitespace) can be ' ' for single-line format, '\n' for multi-line.
  */
-#define	SNPRINTF_BLKPTR(func, ws, buf, size, bp, type, checksum, compress) \
+#define	SNPRINTF_BLKPTR(func, ws, buf, size, bp, type, checksum, crypt_type, \
+	compress) \
 {									\
 	static const char *copyname[] =					\
 	    { "zero", "single", "double", "triple" };			\
@@ -670,6 +670,14 @@ _NOTE(CONSTCOND) } while (0)
 			    (u_longlong_t)DVA_GET_ASIZE(dva),		\
 			    ws);					\
 		}							\
+		if (BP_IS_ENCRYPTED(bp)) {				\
+			len += func(buf + len, size - len,		\
+			    "salt=%llx iv=%llx:%llx%c",			\
+			    (u_longlong_t)bp->blk_dva[2].dva_word[0],	\
+			    (u_longlong_t)bp->blk_dva[2].dva_word[1],	\
+			    (u_longlong_t)BP_GET_IV2(bp),		\
+			    ws);					\
+		}							\
 		if (BP_IS_GANG(bp) &&					\
 		    DVA_GET_ASIZE(&bp->blk_dva[2]) <=			\
 		    DVA_GET_ASIZE(&bp->blk_dva[1]) / 2)			\
@@ -682,7 +690,7 @@ _NOTE(CONSTCOND) } while (0)
 		    type,						\
 		    checksum,						\
 		    compress,						\
-		    BP_USES_CRYPT(bp) ? "crypt" : "nocrypt",		\
+		    crypt_type,						\
 		    BP_GET_BYTEORDER(bp) == 0 ? "BE" : "LE",		\
 		    BP_IS_GANG(bp) ? "gang" : "contiguous",		\
 		    BP_GET_DEDUP(bp) ? "dedup" : "unique",		\
@@ -998,9 +1006,9 @@ extern void spa_history_log_internal_dd(dsl_dir_t *dd, const char *operation,
 
 /* error handling */
 struct zbookmark_phys;
-extern void spa_log_error(spa_t *spa, zio_t *zio);
+extern void spa_log_error(spa_t *spa, const zbookmark_phys_t *zb);
 extern void zfs_ereport_post(const char *class, spa_t *spa, vdev_t *vd,
-    zio_t *zio, uint64_t stateoroffset, uint64_t length);
+    zbookmark_phys_t *zb, zio_t *zio, uint64_t stateoroffset, uint64_t length);
 extern void zfs_post_remove(spa_t *spa, vdev_t *vd);
 extern void zfs_post_state_change(spa_t *spa, vdev_t *vd, uint64_t laststate);
 extern void zfs_post_autoreplace(spa_t *spa, vdev_t *vd);

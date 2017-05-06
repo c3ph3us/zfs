@@ -34,33 +34,30 @@
  *
  * All master keys are stored encrypted on disk in the form of the DSL
  * Crypto Key ZAP object. The binary key data in this object is always
- * randomly generated and is encrypted with the user's secret key. This
+ * randomly generated and is encrypted with the user's wrapping key. This
  * layer of indirection allows the user to change their key without
  * needing to re-encrypt the entire dataset. The ZAP also holds on to the
  * (non-encrypted) encryption algorithm identifier, IV, and MAC needed to
  * safely decrypt the master key. For more info on the user's key see the
  * block comment in libzfs_crypto.c
  *
- * In memory encryption keys are managed through the spa_keystore. The
+ * In-memory encryption keys are managed through the spa_keystore. The
  * keystore consists of 3 AVL trees, which are as follows:
  *
  * The Wrapping Key Tree:
  * The wrapping key (wkey) tree stores the user's keys that are fed into the
  * kernel through 'zfs load-key' and related commands. Datasets inherit their
- * parent's wkey, so they are refcounted. The wrapping keys remain in memory
- * until they are explicitly unloaded (with "zfs unload-key"). Unloading is
- * only possible when no datasets are using them (refcount=0).
+ * parent's wkey by default, so these structures are refcounted. The wrapping
+ * keys remain in memory until they are explicitly unloaded (with
+ * "zfs unload-key"). Unloading is only possible when no datasets are using
+ * them (refcount=0).
  *
  * The DSL Crypto Key Tree:
- * The DSL Crypto Keys are the in-memory representation of decrypted master
- * keys. They are used by the functions in zio_crypt.c to perform encryption
- * and decryption. The decrypted master key bit patterns are shared between
- * all datasets within a "clone family", but each clone may use a different
- * wrapping key. As a result, we maintain one of these structs for each clone
- * to allow us to manage the loading and unloading of each separately.
- * Snapshots of a given dataset, however, will share a DSL Crypto Key, so they
- * are also refcounted. Once the refcount on a key hits zero, it is immediately
- * zeroed out and freed.
+ * The DSL Crypto Keys (DCK) are the in-memory representation of decrypted
+ * master keys. They are used by the functions in zio_crypt.c to perform
+ * encryption, decryption, and authentication. Snapshots and clones of a given
+ * dataset will share a DSL Crypto Key, so they are also refcounted. Once the
+ * refcount on a key hits zero, it is immediately zeroed out and freed.
  *
  * The Crypto Key Mapping Tree:
  * The zio layer needs to lookup master keys by their dataset object id. Since
@@ -1482,9 +1479,15 @@ spa_keystore_change_key(const char *dsname, dsl_crypto_params_t *dcp)
 	skcka.skcka_dsname = dsname;
 	skcka.skcka_cp = dcp;
 
-	/* perform the actual work in syncing context */
+	/*
+	 * Perform the actual work in syncing context. The blocks modified
+	 * here could be calculated but it would require holding the pool
+	 * lock and tarversing all of the datasets that will have their keys
+	 * changed.
+	 */
 	return (dsl_sync_task(dsname, spa_keystore_change_key_check,
-	    spa_keystore_change_key_sync, &skcka, 0, ZFS_SPACE_CHECK_NORMAL));
+	    spa_keystore_change_key_sync, &skcka, 15,
+	    ZFS_SPACE_CHECK_RESERVED));
 }
 
 int
@@ -1563,7 +1566,7 @@ dsl_dataset_promote_crypt_check(dsl_dir_t *target, dsl_dir_t *origin)
 
 	/*
 	 * The origin is inheriting its encryption root from its parent.
-	 * Check that the parent of the target has the same encryption root
+	 * Check that the parent of the target has the same encryption root.
 	 */
 	ret = dsl_dir_get_encryption_root_ddobj(origin->dd_parent, &op_rddobj);
 	if (ret != 0)
@@ -1976,6 +1979,14 @@ dsl_crypto_recv_key_check(void *arg, dmu_tx_t *tx)
 	if (ret != 0)
 		goto error;
 
+	/*
+	 * Useraccounting is not portable and must be done with the keys loaded.
+	 * Therefore, whenever we do any kind of receive the useraccounting
+	 * must not be present.
+	 */
+	ASSERT0(os->os_flags & OBJSET_FLAG_USERACCOUNTING_COMPLETE);
+	ASSERT0(os->os_flags & OBJSET_FLAG_USEROBJACCOUNTING_COMPLETE);
+
 	mdn = DMU_META_DNODE(os);
 
 	/*
@@ -2057,13 +2068,13 @@ dsl_crypto_recv_key_sync(void *arg, dmu_tx_t *tx)
 	/*
 	 * Set the portable MAC. The local MAC will always be zero since the
 	 * incoming data will all be portable and user accounting will be
-	 * deferred iuntil the next mount. Afterwards, flag the os to be
+	 * deferred until the next mount. Afterwards, flag the os to be
 	 * written out raw next time.
 	 */
 	arc_release(os->os_phys_buf, &os->os_phys_buf);
 	bcopy(portable_mac, os->os_phys->os_portable_mac, ZIO_OBJSET_MAC_LEN);
 	bzero(os->os_phys->os_local_mac, ZIO_OBJSET_MAC_LEN);
-	os->os_need_raw = B_TRUE;
+	os->os_next_write_raw = B_TRUE;
 
 	/* set metadnode compression and checksum */
 	mdn->dn_compress = compress;
@@ -2130,7 +2141,7 @@ dsl_crypto_recv_key(const char *poolname, uint64_t dsobj,
 	dcrka.dcrka_ostype = ostype;
 
 	return (dsl_sync_task(poolname, dsl_crypto_recv_key_check,
-	    dsl_crypto_recv_key_sync, &dcrka, 5, ZFS_SPACE_CHECK_NORMAL));
+	    dsl_crypto_recv_key_sync, &dcrka, 1, ZFS_SPACE_CHECK_NORMAL));
 }
 
 int
@@ -2411,7 +2422,7 @@ spa_do_crypt_objset_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
 
 	if (bcmp(portable_mac, osp->os_portable_mac, ZIO_OBJSET_MAC_LEN) != 0 ||
 	    bcmp(local_mac, osp->os_local_mac, ZIO_OBJSET_MAC_LEN) != 0) {
-		return (SET_ERROR(EIO));
+		return (SET_ERROR(ECKSUM));
 	}
 
 	return (0);
@@ -2455,7 +2466,7 @@ spa_do_crypt_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj, abd_t *abd,
 	}
 
 	if (bcmp(digestbuf, mac, ZIO_DATA_MAC_LEN) != 0)
-		return (SET_ERROR(EIO));
+		return (SET_ERROR(ECKSUM));
 
 	return (0);
 
@@ -2467,7 +2478,7 @@ error:
 }
 
 /*
- * This function serve as a multiplexer for encryption and decryption of
+ * This function serves as a multiplexer for encryption and decryption of
  * all blocks (except the L2ARC). For encryption, it will populate the IV,
  * salt, MAC, and cabd (the ciphertext). On decryption it will simply use
  * these fields to populate pabd (the plaintext).

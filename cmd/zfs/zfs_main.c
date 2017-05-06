@@ -7098,7 +7098,7 @@ load_key_callback(zfs_handle_t *zhp, void *data)
 	uint64_t keystatus = zfs_prop_get_int(zhp, ZFS_PROP_KEYSTATUS);
 
 	/*
-	 * If we are doing a recursive load-key, we want to skip loading
+	 * If we are working recursively, we want to skip loading / unloading
 	 * keys for non-encryption roots and datasets whose keys are already
 	 * in the desired end-state.
 	 */

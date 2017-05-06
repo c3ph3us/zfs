@@ -67,9 +67,10 @@ enum ddt_class {
 typedef struct ddt_key {
 	zio_cksum_t	ddk_cksum;	/* 256-bit block checksum */
 	/*
-	 * Encoded with logical & physical size, and compression, as follows:
+	 * Encoded with logical & physical size, encryption, and compression,
+	 * as follows:
 	 *   +-------+-------+-------+-------+-------+-------+-------+-------+
-	 *   |   0   |   0   |   0   |E| comp|     PSIZE     |     LSIZE     |
+	 *   |   0   |   0   |   0   |X| comp|     PSIZE     |     LSIZE     |
 	 *   +-------+-------+-------+-------+-------+-------+-------+-------+
 	 */
 	uint64_t	ddk_prop;

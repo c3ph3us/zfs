@@ -2251,8 +2251,8 @@ do_import(nvlist_t *config, const char *newname, const char *mntopts,
 		return (1);
 
 	/*
-	 * Loading keys is best effort. We don't want to return if it fails
-	 * but we do want to give the error to the caller.
+	 * Loading keys is best effort. We don't want to return immediately
+	 * if it fails but we do want to give the error to the caller.
 	 */
 	if (flags & ZFS_IMPORT_LOAD_KEYS) {
 		ret = zfs_crypto_attempt_load_keys(g_zfs, name);

@@ -191,9 +191,6 @@ typedef struct dsl_dataset {
 	 */
 	refcount_t ds_longholds;
 
-	/* refcount on our encryption key mapping */
-	uint32_t ds_key_mappings;
-
 	/* no locking; only for making guesses */
 	uint64_t ds_trysnap_txg;
 
@@ -253,7 +250,7 @@ dsl_dataset_phys(dsl_dataset_t *ds)
 
 /* flags for holding the dataset */
 typedef enum ds_hold_flags {
-	DS_HOLD_FLAG_DECRYPT	= 1 << 0 /* needs access encrypted data */
+	DS_HOLD_FLAG_DECRYPT	= 1 << 0 /* needs access to encrypted data */
 } ds_hold_flags_t;
 
 int dsl_dataset_hold(struct dsl_pool *dp, const char *name, void *tag,

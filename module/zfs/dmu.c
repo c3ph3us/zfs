@@ -95,7 +95,7 @@ const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{ DMU_BSWAP_UINT8,	FALSE,	TRUE,	"ZFS plain file"	},
 	{ DMU_BSWAP_ZAP,	TRUE,	TRUE,	"ZFS directory"		},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"ZFS master node"	},
-	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"ZFS delete queue"	},
+	{ DMU_BSWAP_ZAP,	TRUE,	TRUE,	"ZFS delete queue"	},
 	{ DMU_BSWAP_UINT8,	FALSE,	TRUE,	"zvol object"		},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"zvol prop"		},
 	{ DMU_BSWAP_UINT8,	FALSE,	TRUE,	"other uint8[]"		},
@@ -122,7 +122,7 @@ const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{ DMU_BSWAP_ZAP,	TRUE,	TRUE,	"SA attr registration"	},
 	{ DMU_BSWAP_ZAP,	TRUE,	TRUE,	"SA attr layouts"	},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"scan translations"	},
-	{ DMU_BSWAP_UINT8,	FALSE,	FALSE,	"deduplicated block"	},
+	{ DMU_BSWAP_UINT8,	FALSE,	TRUE,	"deduplicated block"	},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"DSL deadlist map"	},
 	{ DMU_BSWAP_UINT64,	TRUE,	FALSE,	"DSL deadlist map hdr"	},
 	{ DMU_BSWAP_ZAP,	TRUE,	FALSE,	"DSL dir clones"	},
@@ -2091,7 +2091,9 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 	 * via a MAC. Encrypted objects store their IV and salt in the last DVA
 	 * in the bp, so we cannot use all copies. Encrypted objects are also
 	 * not subject to nopwrite since writing the same data will still
-	 * result in a new ciphertext.
+	 * result in a new ciphertext. Only encrypted blocks can be dedup'd
+	 * to avoid ambiguity in the dedup code since the DDT does not store
+	 * object types.
 	 */
 	if (os->os_encrypted && (wp & WP_NOFILL) == 0) {
 		encrypt = B_TRUE;
@@ -2099,6 +2101,8 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 		if (DMU_OT_IS_ENCRYPTED(type)) {
 			copies = MIN(copies, SPA_DVAS_PER_BP - 1);
 			nopwrite = B_FALSE;
+		} else {
+			dedup = B_FALSE;
 		}
 
 		if (type == DMU_OT_DNODE || type == DMU_OT_OBJSET)

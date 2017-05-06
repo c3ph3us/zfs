@@ -33,7 +33,7 @@
  * User keys are used to decrypt the master encryption keys of a dataset. This
  * indirection allows a user to change his / her access key without having to
  * re-encrypt the entire dataset. User keys can be provided in one of several
- * ways. Raw keys are simlply given to the kernel as is. Similarly, hex keys
+ * ways. Raw keys are simply given to the kernel as is. Similarly, hex keys
  * are converted to binary and passed into the kernel. Password based keys are
  * a bit more complicated. Passwords alone do not provide suitable entropy for
  * encryption and may be too short or too long to be used. In order to derive
@@ -41,9 +41,9 @@
  * to take a (relatively) long time to calculate in order to discourage
  * attackers from guessing from a list of common passwords. PBKDF2 requires
  * 2 additional parameters. The first is the number of iterations to run, which
- * will ultimately decide how long it takes to derive the resulting key from
+ * will ultimately determine how long it takes to derive the resulting key from
  * the password. The second parameter is a salt that is randomly generated for
- * each datasset. The salt is used to "tweak" PBKDF2 such that a group of
+ * each dataset. The salt is used to "tweak" PBKDF2 such that a group of
  * attackers cannot reasonably generate a table of commonly known passwords to
  * their output keys and expect it work for all past and future PBKDF2 users.
  * We store the salt as a hidden property of the dataset (although it is
@@ -958,7 +958,7 @@ zfs_crypto_clone_check(libzfs_handle_t *hdl, zfs_handle_t *origin_zhp,
 
 	/*
 	 * No encryption properties should be specified. They will all be
-	 * inherited from the origin dataset
+	 * inherited from the origin dataset.
 	 */
 	if (nvlist_exists(props, zfs_prop_to_name(ZFS_PROP_KEYFORMAT)) ||
 	    nvlist_exists(props, zfs_prop_to_name(ZFS_PROP_KEYLOCATION)) ||
@@ -1425,8 +1425,8 @@ zfs_crypto_rewrap(zfs_handle_t *zhp, nvlist_t *raw_props, boolean_t inheritkey)
 	}
 
 	/*
-	 * if the user wants to use the inheritkey variant of this function
-	 * we son't need to collect any crypto arguments
+	 * If the user wants to use the inheritkey variant of this function
+	 * we don't need to collect any crypto arguments.
 	 */
 	if (!inheritkey) {
 		/* validate the provided properties */

@@ -64,7 +64,7 @@ typedef struct arc_prune arc_prune_t;
 /*
  * Because the ARC can store encrypted data, errors (not due to bugs) may arise
  * while transforming data into its desired format - specifically, when
- * decrypting, the key may not be present, or the HMAC may not be correct,
+ * decrypting, the key may not be present, or the HMAC may not be correct
  * which signifies deliberate tampering with the on-disk state
  * (assuming that the checksum was correct). The "error" parameter will be
  * nonzero in this case, even if there is no associated zio.
@@ -123,7 +123,9 @@ typedef enum arc_flags
 	ARC_FLAG_L2_WRITE_HEAD		= 1 << 13,	/* head of write list */
 	/*
 	 * Encrypted or authenticated on disk (may be plaintext in memory).
-	 * This header has b_crypt_hdr allocated.
+	 * This header has b_crypt_hdr allocated. Does not include indirect
+	 * blocks with checksums of MACs which will also have their X
+	 * (encrypted) bit set in the bp.
 	 */
 	ARC_FLAG_PROTECTED		= 1 << 14,
 	/* data has not been authenticated yet */

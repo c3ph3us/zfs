@@ -1105,7 +1105,7 @@ be changed after dataset creation, the keyformat can be with
 .RS 4n
 Controls where the user's encryption key will be loaded from by default for
 commands such as \fBzfs load-key\fR and \fBzfs mount -l\fR. This property is
-only set when the dataset is encrypted. Only set for encryption roots.
+only set for encrypted datasets which are encryption roots.
 .sp
 Even though the encryption suite cannot be changed after dataset creation, the
 keylocation can be with either \fBzfs set\fR or \fBzfs change-key\fR. If
@@ -1198,8 +1198,8 @@ This property is not used on Linux.
 .RS 4n
 Controls the number of PBKDF2 iterations that a \fBpassphrase\fR encryption key
 should be run through when processing it into an encryption key. This property
-is only defined when encryption is enabled and a \fBpassphrase\fR key is
-selected. The goal of PBKDF2 is to significantly increase the computational
+is only defined when encryption is enabled and a keyformat of \fBpassphrase\fR
+is selected. The goal of PBKDF2 is to significantly increase the computational
 difficulty needed to brute force a user's passphrase. This is accomplished by
 forcing the attacker to run each passphrase through a computationally expensive
 hashing function many times before they arrive at the resulting key. A user who
@@ -1795,20 +1795,20 @@ hierarchy, file size, file holes, and dedup tables. Key rotation is managed
 internally by the \fBZFS\fR kernel module and changing the user's key does not
 require re-encrypting the entire dataset. Datasets can be scrubbed, resilvered,
 renamed, and deleted without the encryption keys being loaded (see the
-\fBkeylocation\fR property and \fBzfs load-key\fR subcommand for more info).
+\fBzfs load-key\fR subcommand for more info on key loading).
 .sp
 .LP
 Creating an encrypted dataset requires specifying the \fBencryption\fR and
-\fBkeyformat\fR at creationg time, along with an optional \fBkeylocation\fR
-and \fBpbkdf2iters\fR. After entering an encryption key, \fBZFS\fR the created
-dataset will become an encryption root. Any descendant datasets will inherit
-their encryption key from the encryption root, meaning that loading, unloading,
-or changing the key for the encryption root will implicitly do the same for
-all inheriting datasets. If this inheritence is not desired, simply supply a new
-\fBencryption\fR and \fbkeyformat\fR when creating the child dataset or use
-\fBzfs change-key\fR to break the relationship. The one exception is that clones
-will always use their origin's encryption key. Encryption root inheritence
-can be tracked via the read-only \fBencryptionroot\fR property.
+\fBkeyformat\fR properties at creation time, along with an optional
+\fBkeylocation\fR and \fBpbkdf2iters\fR. After entering an encryption key, the
+created dataset will become an encryption root. Any descendant datasets will
+inherit their encryption key from the encryption root, meaning that loading,
+unloading, or changing the key for the encryption root will implicitly do the
+same for all inheriting datasets. If this inheritence is not desired, simply
+supply a new \fBencryption\fR and \fbkeyformat\fR when creating the child
+dataset or use \fBzfs change-key\fR to break the relationship. The one exception
+is that clones will always use their origin's encryption key. Encryption root
+inheritence can be tracked via the read-only \fBencryptionroot\fR property.
 .sp
 .LP
 Encryption changes the behavior of a few \fBZFS\fR operations. Encryption is
@@ -3048,11 +3048,11 @@ backup may then be received on an untrusted machine since that machine will
 not have the encryption keys to read the protected data or alter it without
 being detected. Upon being received, the dataset will have the same encryption
 keys as it did on the send side, although the \fBkeylocation\fR property will
-be defaulted to \fBprompt\fR. For unencrypted datasets, this flag will be
-equivalent to \fB-c\fR. Note that if you do not use this flag for sending
-encrypted datasets, data will be sent unencrypted and may be re-encrypted with
-a different encryption key on the receiving system, which will disable the
-ability to do a raw send to that system for incrementals.
+be defaulted to \fBprompt\fR if not otherwise provided. For unencrypted
+datasets, this flag will be equivalent to \fB-c\fR. Note that if you do not use
+this flag for sending encrypted datasets, data will be sent unencrypted and may
+be re-encrypted with a different encryption key on the receiving system, which
+will disable the ability to do a raw send to that system for incrementals.
 .RE
 
 .sp
@@ -3178,11 +3178,11 @@ backup may then be received on an untrusted machine since that machine will
 not have the encryption keys to read the protected data or alter it without
 being detected. Upon being received, the dataset will have the same encryption
 keys as it did on the send side, although the \fBkeylocation\fR property will
-be defaulted to \fBprompt\fR. For unencrypted datasets, this flag will be
-equivalent to \fB-c\fR. Note that if you do not use this flag for sending
-encrypted datasets, data will be sent unencrypted and may be re-encrypted with
-a different encryption key on the receiving system, which will disable the
-ability to do a raw send to that system for incrementals.
+be defaulted to \fBprompt\fR if not otherwise provided. For unencrypted
+datasets, this flag will be equivalent to \fB-c\fR. Note that if you do not use
+this flag for sending encrypted datasets, data will be sent unencrypted and may
+be re-encrypted with a different encryption key on the receiving system, which
+will disable the ability to do a raw send to that system for incrementals.
 .RE
 
 .sp
@@ -3710,10 +3710,10 @@ Load the key for \fIfilesystem\fR, allowing it and all children that inherit
 the \fBekeylocation\fR property to be accessed. The key will be expected in
 the format specified by the \fBkeyformat\fR and location specified by the
 \fBkeylocation\fR property. Note that if the \fBkeylocation\fR is set to
-\fBprompt\fR theterminal will interactively wait for the key to be entered.
+\fBprompt\fR the terminal will interactively wait for the key to be entered.
 Loading a key will not automatically mount the dataset. If that functionality
-is desired, \fBzfs mount -l\fR will ask for the key and mount the dataset. When
-a key is loaded the \fBkeystatus\fR property will become \fBavailable\fR.
+is desired, \fBzfs mount -l\fR will ask for the key and mount the dataset. Once
+the key is loaded the \fBkeystatus\fR property will become \fBavailable\fR.
 .sp
 .ne 2
 .na
@@ -3767,7 +3767,7 @@ change the value of the property on the dataset. Note that if used with either
 .RS 4n
 Unloads a key from ZFS, removing the ability to access the dataset and all of
 its children that inherit the \fBkeylocation\fR property. This requires that the
-dataset is not currently open or mounted. When a key is unloaded the
+dataset is not currently open or mounted. Once the key is unloaded the
 \fBkeystatus\fR property will become \fBunavailable\fR.
 .sp
 .ne 2
@@ -3776,7 +3776,7 @@ dataset is not currently open or mounted. When a key is unloaded the
 .ad
 .sp .6
 .RS 4n
-Recursively loads the keys for the specified filesystem and all descendent
+Recursively unloads the keys for the specified filesystem and all descendent
 encryption roots.
 .RE
 .sp
@@ -3786,7 +3786,7 @@ encryption roots.
 .ad
 .sp .6
 .RS 4n
-Loads the keys for all encryption roots in all imported pools.
+Unloads the keys for all encryption roots in all imported pools.
 .RE
 
 .RE
@@ -3808,10 +3808,9 @@ Allows a user to change the encryption key used to access a dataset. This
 command requires that the existing key for the dataset is already loaded into
 ZFS. This command may also be used to change the \fBkeylocation\fR,
 \fBkeyformat\fR, \fBpbkdf2iters\fR properties as needed. If the dataset was
-previously inheriting the \fBkeylocation\fR property when this command is run it
-will now be locally set, indicating that this dataset must have its key loaded
-separately from the parent. Alternatively, the \fB-i\fR flag may be provided to
-cause an encryption root to inherit the parent's key instead.
+not previously an encryption root it will become one. Alternatively, the
+\fB-i\fR flag may be provided to cause an encryption root to inherit the
+parent's key instead.
 .sp
 .ne 2
 .na

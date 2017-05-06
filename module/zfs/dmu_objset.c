@@ -107,13 +107,6 @@ dmu_objset_zil(objset_t *os)
 	return (os->os_zil);
 }
 
-boolean_t
-dmu_objset_key_mapped(objset_t *os)
-{
-	return ((os->os_dsl_dataset) ?
-	    os->os_dsl_dataset->ds_key_mappings != 0 : B_FALSE);
-}
-
 dsl_pool_t *
 dmu_objset_pool(objset_t *os)
 {
@@ -405,8 +398,7 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 		if (DMU_OS_IS_L2CACHEABLE(os))
 			aflags |= ARC_FLAG_L2CACHE;
 
-		if (ds != NULL && ds->ds_dir->dd_crypto_obj != 0 &&
-		    ds->ds_key_mappings == 0) {
+		if (ds != NULL && ds->ds_dir->dd_crypto_obj != 0) {
 			ASSERT3U(BP_GET_COMPRESS(bp), ==, ZIO_COMPRESS_OFF);
 			ASSERT(BP_IS_AUTHENTICATED(bp));
 			zio_flags |= ZIO_FLAG_RAW;
@@ -713,8 +705,10 @@ dmu_objset_own(const char *name, dmu_objset_type_t type,
 
 	dsl_pool_rele(dp, FTAG);
 
-	if (dmu_objset_userobjspace_upgradable(*osp) &&
-	    (!(*osp)->os_encrypted || dmu_objset_key_mapped(*osp)))
+	/* we were able to own the dataset, so we shouldnt be receiving */
+	ASSERT0((*osp)->os_receiving);
+
+	if (dmu_objset_userobjspace_upgradable(*osp))
 		dmu_objset_userobjspace_upgrade(*osp);
 
 	return (0);
@@ -994,9 +988,12 @@ dmu_objset_create_impl_dnstats(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	ASSERT(type < DMU_OST_NUMTYPES);
 	os->os_phys->os_type = type;
 
-	/* enable user accounting if it is enabled and this is not a raw recv */
+	/*
+	 * Enable user accounting if it is enabled and this is not an
+	 * encrypted receive.
+	 */
 	if (dmu_objset_userused_enabled(os) &&
-	    (!os->os_encrypted || dmu_objset_key_mapped(os))) {
+	    (!os->os_encrypted || !os->os_receiving)) {
 		os->os_phys->os_flags |= OBJSET_FLAG_USERACCOUNTING_COMPLETE;
 		if (dmu_objset_userobjused_enabled(os)) {
 			ds->ds_feature_activation_needed[
@@ -1170,7 +1167,7 @@ dmu_objset_create(const char *name, dmu_objset_type_t type, uint64_t flags,
 
 	return (dsl_sync_task(name,
 	    dmu_objset_create_check, dmu_objset_create_sync, &doca,
-	    5, ZFS_SPACE_CHECK_NORMAL));
+	    6, ZFS_SPACE_CHECK_NORMAL));
 }
 
 typedef struct dmu_objset_clone_arg {
@@ -1275,7 +1272,7 @@ dmu_objset_clone(const char *clone, const char *origin)
 
 	return (dsl_sync_task(clone,
 	    dmu_objset_clone_check, dmu_objset_clone_sync, &doca,
-	    5, ZFS_SPACE_CHECK_NORMAL));
+	    6, ZFS_SPACE_CHECK_NORMAL));
 }
 
 int
@@ -1493,8 +1490,9 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 	 * the os_phys_buf raw. Neither of these actions will effect the MAC
 	 * at this point.
 	 */
-	if (arc_is_unauthenticated(os->os_phys_buf) || os->os_need_raw) {
-		os->os_need_raw = B_FALSE;
+	if (arc_is_unauthenticated(os->os_phys_buf) || os->os_next_write_raw) {
+		ASSERT(os->os_encrypted);
+		os->os_next_write_raw = B_FALSE;
 		arc_convert_to_raw(os->os_phys_buf,
 		    os->os_dsl_dataset->ds_object, ZFS_HOST_BYTEORDER,
 		    DMU_OT_OBJSET, NULL, NULL, NULL);
@@ -1524,7 +1522,7 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 	txgoff = tx->tx_txg & TXG_MASK;
 
 	if (dmu_objset_userused_enabled(os) &&
-	    (!os->os_encrypted || dmu_objset_key_mapped(os))) {
+	    (!os->os_encrypted || !os->os_receiving)) {
 		/*
 		 * We must create the list here because it uses the
 		 * dn_dirty_link[] of this txg.  But it may already
@@ -1805,7 +1803,7 @@ dmu_objset_do_userquota_updates(objset_t *os, dmu_tx_t *tx)
 		return;
 
 	/* if this is a raw receive just return and handle accounting later */
-	if (os->os_encrypted && !dmu_objset_key_mapped(os))
+	if (os->os_encrypted && os->os_receiving)
 		return;
 
 	/* Allocate the user/groupused objects if necessary. */
@@ -1888,14 +1886,15 @@ dmu_objset_userquota_get_ids(dnode_t *dn, boolean_t before, dmu_tx_t *tx)
 		return;
 
 	/*
-	 * If we are doing a raw receive we will be writing out raw data
-	 * and will not have access to the decrypted bonus / spill data that
-	 * we would normally need to do all of the user space accounting.
-	 * However, in this case the we will receive the user accounting data
-	 * as part of the send anyway so we can simply rely on that without
-	 * redoing the work.
+	 * Raw receives introduce a problem with user accounting. Raw
+	 * receives cannot update the user accounting info because the
+	 * user ids and the sizes are encrypted. To guarantee that we
+	 * never end up with bad user accounting, we simply disable it
+	 * during raw receives. We also disable this for normal receives
+	 * so that an incremental raw receive may be done on top of an
+	 * existing non-raw receive.
 	 */
-	if (os->os_encrypted && !dmu_objset_key_mapped(os))
+	if (os->os_encrypted && os->os_receiving)
 		return;
 
 	if (before && (flags & (DN_ID_CHKED_BONUS|DN_ID_OLD_EXIST|
@@ -2671,7 +2670,6 @@ dmu_objset_willuse_space(objset_t *os, int64_t space, dmu_tx_t *tx)
 #if defined(_KERNEL) && defined(HAVE_SPL)
 EXPORT_SYMBOL(dmu_objset_zil);
 EXPORT_SYMBOL(dmu_objset_pool);
-EXPORT_SYMBOL(dmu_objset_key_mapped);
 EXPORT_SYMBOL(dmu_objset_ds);
 EXPORT_SYMBOL(dmu_objset_type);
 EXPORT_SYMBOL(dmu_objset_name);

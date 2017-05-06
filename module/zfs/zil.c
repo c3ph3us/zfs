@@ -729,6 +729,8 @@ zil_claim(dsl_pool_t *dp, dsl_dataset_t *ds, void *txarg)
 		if (!BP_IS_HOLE(&zh->zh_log))
 			zio_free_zil(zilog->zl_spa, first_txg, &zh->zh_log);
 		BP_ZERO(&zh->zh_log);
+		if (os->os_encrypted)
+			os->os_next_write_raw = B_TRUE;
 		dsl_dataset_dirty(dmu_objset_ds(os), tx);
 		dmu_objset_disown(os, B_FALSE, FTAG);
 		return (0);

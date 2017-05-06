@@ -41,30 +41,6 @@ struct zbookmark_phys;
 #define	MASTER_KEY_MAX_LEN	32
 #define	L2ARC_DEFAULT_CRYPT ZIO_CRYPT_AES_256_CCM
 
-/*
- * After encrypting many blocks with the same key we may start to run up
- * against the theoretical limits of how much data can securely be encrypted
- * with a single key using the supported encryption modes. The most obvious
- * limitation is that our risk of generating 2 equivalent 96 bit IVs increases
- * the more IVs we generate (which both GCM and CCM modes strictly forbid).
- * This risk actually grows surprisingly quickly over time according to the
- * Birthday Problem. With a total IV space of 2^(96 bits), and assuming we have
- * generated n IVs with a cryptographically secure RNG, the approximate
- * probability p(n) of a collision is given as:
- *
- * p(n) ~= e^(-n(n-1)/(2*(2^96)))
- *
- * [http://www.math.cornell.edu/~mec/2008-2009/TianyiZheng/Birthday.html]
- *
- * Assuming that we want to ensure that p(n) never goes over 1 / 1 trillion
- * we must not write more than 398065730 blocks with the same encryption key,
- * which is significantly less than the zettabyte of data that ZFS claims to
- * be able to store. To counteract this, we rotate our keys after 400000000
- * blocks have been written by generating a new random 64 bit salt for our
- * HKDF encryption key generation function.
- */
-#define	ZIO_CRYPT_MAX_SALT_USAGE 400000000
-
 /* utility macros */
 #define	BITS_TO_BYTES(x) ((x + NBBY - 1) / NBBY)
 #define	BYTES_TO_BITS(x) (x * NBBY)

@@ -1103,16 +1103,24 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags)
 	    db->db_objset->os_dsl_dataset->ds_object : DMU_META_OBJSET,
 	    db->db.db_object, db->db_level, db->db_blkid);
 
+	/*
+	 * All bps of an encrypted os should have the encryption bit set.
+	 * If this is not true it indicates tampering and we report an error.
+	 */
+	if (db->db_objset->os_encrypted && !BP_USES_CRYPT(db->db_blkptr)) {
+		spa_log_error(db->db_objset->os_spa, &zb);
+		zfs_panic_recover("unencrypted block in encrypted "
+		    "object set %llu", dmu_objset_id(db->db_objset));
+		return (SET_ERROR(EIO));
+	}
+
 	dbuf_add_ref(db, NULL);
 
 	zio_flags = (flags & DB_RF_CANFAIL) ?
 	    ZIO_FLAG_CANFAIL : ZIO_FLAG_MUSTSUCCEED;
 
-	if ((flags & DB_RF_NO_DECRYPT) && BP_IS_PROTECTED(db->db_blkptr)) {
-		ASSERT3U(BP_GET_TYPE(db->db_blkptr), ==, DMU_OT_DNODE);
-		ASSERT3U(BP_GET_LEVEL(db->db_blkptr), ==, 0);
+	if ((flags & DB_RF_NO_DECRYPT) && BP_IS_PROTECTED(db->db_blkptr))
 		zio_flags |= ZIO_FLAG_RAW;
-	}
 
 	err = arc_read(zio, db->db_objset->os_spa, db->db_blkptr,
 	    dbuf_read_done, db, ZIO_PRIORITY_SYNC_READ, zio_flags,
@@ -2546,7 +2554,8 @@ dbuf_prefetch_indirect_done(zio_t *zio, int err, arc_buf_t *abuf, void *private)
  * Issue prefetch reads for the given block on the given level.  If the indirect
  * blocks above that block are not in memory, we will read them in
  * asynchronously.  As a result, this call never blocks waiting for a read to
- * complete.
+ * complete. Note that the prefetch might fail if the dataset is encrypted and
+ * the encryption key is unmapped before the IO completes.
  */
 void
 dbuf_prefetch(dnode_t *dn, int64_t level, uint64_t blkid, zio_priority_t prio,

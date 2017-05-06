@@ -28,43 +28,45 @@
 
 /*
  * This file is responsible for handling all of the details of generating
- * encryption parameters and performing encryption.
+ * encryption parameters and performing encryption and authentication.
  *
  * BLOCK ENCRYPTION PARAMETERS:
- * Encryption Algorithm (crypt):
- * The encryption algorithm and mode we are going to use. We currently support
- * AES-GCM and AES-CCM in 128, 192, and 256 bits.
+ * Encryption /Authentication Algorithm Suite (crypt):
+ * The encryption algorithm, mode, and key length we are going to use. We
+ * currently support AES in either GCM or CCM modes with 128, 192, and 256 bit
+ * keys. All authentication is currently done with SHA512-HMAC.
  *
  * Plaintext:
- * The unencrypted data that we want to encrypt
+ * The unencrypted data that we want to encrypt.
  *
  * Initialization Vector (IV):
  * An initialization vector for the encryption algorithms. This is
  * used to "tweak" the encryption algorithms so that equivalent blocks of
- * data are encrypted into different ciphertext outputs. Different modes
- * of encryption have different requirements for the IV. AES-GCM and AES-CCM
- * require that an IV is never reused with the same encryption key. This
- * value is stored unencrypted and must simply be provided to the decryption
- * function. We use a 96 bit IV (as recommended by NIST). For non-dedup blocks
- * we derive the IV randomly. The first 64 bits of the IV are stored in the
- * second word of DVA[2] and the remaining 32 bits are stored in the upper 32
- * bits of blk_fill. For most object types this is safe because we only encrypt
- * level 0 blocks which means that the fill count will be 1. For DMU_OT_DNODE
- * blocks the fill count is instead used to indicate the number of allocated
- * dnodes beneath the bp. The on-disk format supports at most 2^15 slots per
- * L0 dnode block, because the maximum block size is 16MB (2^24). In either
- * case, for level 0 blocks this number will still be smaller than UINT32_MAX
- * so it is safe to store the IV in the top 32 bits of blk_fill, while leaving
- * the bottom 32 bits of the fill count for the dnode code.
+ * data are encrypted into different ciphertext outputs, thus obfuscating
+ * block patterns. Different modes of encryption have different requirements
+ * for the IV. AES-GCM and AES-CCM require that an IV is never reused with the
+ * same encryption key. This value is stored unencrypted and must simply be
+ * provided to the decryption function. We use a 96 bit IV (as recommended by
+ * NIST) for all block encryption. For non-dedup blocks we derive the IV
+ * randomly. The first 64 bits of the IV are stored in the second word of DVA[2]
+ * and the remaining 32 bits are stored in the upper 32 bits of blk_fill. For
+ * most object types this is safe because we only encrypt level 0 blocks which
+ * means that the fill count will be 1. For DMU_OT_DNODE blocks the fill count
+ * is instead used to indicate the number of allocated dnodes beneath the bp.
+ * The on-disk format supports at most 2^15 slots per L0 dnode block, because
+ * the maximum block size is 16MB (2^24). In either case, for level 0 blocks
+ * this number will still be smaller than UINT32_MAX so it is safe to store the
+ * IV in the top 32 bits of blk_fill, while leaving the bottom 32 bits of the
+ * fill count for the dnode code.
  *
  * Master key:
  * This is the most important secret data of an encrypted dataset. It is used
  * along with the salt to generate that actual encryption keys via HKDF. We
- * do not use the master key to encrypt any data because there are theoretical
- * limits on how much data can actually be safely encrypted with any encryption
- * mode. The master key is stored encrypted on disk with the user's key. It's
- * length is determined by the encryption algorithm. For details on how this is
- * stored see the block comment in dsl_crypt.c
+ * do not use the master key to directly encrypt any data because there are
+ * theoretical limits on how much data can actually be safely encrypted with
+ * any encryption mode. The master key is stored encrypted on disk with the
+ * user's wrapping key. It's length is determined by the encryption algorithm.
+ * For details on how this is stored see the block comment in dsl_crypt.c
  *
  * Salt:
  * Used as an input to the HKDF function, along with the master key. We use a
@@ -85,6 +87,14 @@
  * second 128 bits of blk_cksum, leaving the first 128 bits for a truncated
  * regular checksum of the ciphertext which can be used for scrubbing.
  *
+ * OBJECT AUTHENTICATION:
+ * Some object types, such as DMU_OT_MASTER_NODE cannot be encrypted because
+ * they contain some info that always needs to be readable. To prevent this
+ * data from being altered, we authenticate this data using SHA512-HMAC. This
+ * will produce a MAC (similar to the one produced via encryption) which can
+ * be used to verify the object was not modified. HMACs do not require key
+ * rotation or IVs, so we can keep all 3 copies of authenticated data.
+ *
  * ZIL ENCRYPTION:
  * ZIL blocks have their bp written to disk ahead of the associated data, so we
  * cannot store encryption paramaters there as we normally do. For these blocks
@@ -93,30 +103,84 @@
  * encryption time. In addition, ZIL blocks have some pieces that must be left
  * in plaintext for claiming while all of the sensitive user data still needs to
  * be encrypted. The function zio_crypt_init_uios_zil() handles parsing which
- * which pieces of the block need to be encrypted.
+ * which pieces of the block need to be encrypted. All data that is not
+ * encrypted is authenticated using the AAD mechanisms that the supported
+ * encryption modes provide for. In order to preserve the semantics of the ZIL
+ * for encrypted datasets, the ZIL is not protected at the objset level as
+ * described below.
  *
  * DNODE ENCRYPTION:
  * Similarly to ZIL blocks, the core part of each dnode_phys_t needs to be left
  * in plaintext for scrubbing and claiming, but the bonus buffers might contain
  * sensitive user data. The function zio_crypt_init_uios_dnode() handles parsing
- * which which pieces of the block need to be encrypted.
+ * which which pieces of the block need to be encrypted. For more details about
+ * dnode authentication and encryption, see zio_crypt_init_uios_dnode().
+ *
+ * OBJECT SET AUTHENTICATION:
+ * Up to this point, everything we have encrypted and authenticated has been
+ * at level 0 (or -2 for the ZIL). If we did not do any further work the
+ * on-disk format would be suscptible to attacks that deleted or rearrannged
+ * the order of level 0 blocks. Ideally, the cleanest solution would be to
+ * maintain a tree of authentication MACs going up the bp tree. However, this
+ * presents a problem for raw sends. Send files do not send information about
+ * indirect blocks so there would be no convenient way to transfer the MACs and
+ * they cannot be recalculated on the receive side without the master key which
+ * would defeat the purpose of raw sends in the first place. Instead, for the
+ * indirect levels of the bp tree, we use a regular SHA512 of the MACs from
+ * the level below. We also include some portable fields from blk_prop such as
+ * the lsize and compression algorithm to prevent the data from being
+ * misinterpretted.
+ *
+ * At the objset level, we maintain 2 seperate 256 bit MACs in the
+ * objset_phys_t. The first one is "portable" and is the logical root of the
+ * MAC tree maintianed in the metadnode's bps. The second, is "local" and is
+ * used as the root MAC for the user accounting objects, which are also not
+ * transferred via "zfs send". The portable MAC is sent in the DRR_BEGIN payload
+ * of the send file. The useraccounting code ensures that the useraccounting
+ * info is not present upon a receive, so the local MAC can simply be cleared
+ * out at that time. For more info about objset_phys_t authentication, see
+ * zio_crypt_do_objset_hmacs().
  *
  * CONSIDERATIONS FOR DEDUP:
  * In order for dedup to work, blocks that we want to dedup with one another
  * need to use the same IV and encryption key, so that they will have the same
- * cyphertext. Normally, one should never reuse an IV with the same encryption
+ * ciphertext. Normally, one should never reuse an IV with the same encryption
  * key or else AES-GCM and AES-CCM can both actually leak the plaintext of both
  * blocks. In this case, however, since we are using the same plaindata as
  * well all that we end up with is a duplicate of the original data we already
  * had. As a result, an attacker with read access to the raw disk will be able
  * to tell which blocks are the same but this information is already given away
  * by dedup anyway. In order to get the same IVs and encryption keys for
- * equivalent blocks of data we use a HMAC of the plaindata. We use an HMAC
- * here so there is never a reproducible checksum of the plaindata available
- * to the attacker. The HMAC key is kept alongside the master key, encrypted
- * on disk. The first 64 bits of the HMAC are used in place of the random salt,
- * and the next 96 bits are used as the IV.
+ * equivalent blocks of data we use an HMAC of the plaindata. We use an HMAC
+ * here a reproducible checksum of the plaindata is never available to the
+ * attacker. The HMAC key is kept alongside the master key, encrypted on disk.
+ * The first 64 bits of the HMAC are used in place of the random salt, and the
+ * next 96 bits are used as the IV.
  */
+
+/*
+ * After encrypting many blocks with the same key we may start to run up
+ * against the theoretical limits of how much data can securely be encrypted
+ * with a single key using the supported encryption modes. The most obvious
+ * limitation is that our risk of generating 2 equivalent 96 bit IVs increases
+ * the more IVs we generate (which both GCM and CCM modes strictly forbid).
+ * This risk actually grows surprisingly quickly over time according to the
+ * Birthday Problem. With a total IV space of 2^(96 bits), and assuming we have
+ * generated n IVs with a cryptographically secure RNG, the approximate
+ * probability p(n) of a collision is given as:
+ *
+ * p(n) ~= e^(-n(n-1)/(2*(2^96)))
+ *
+ * [http://www.math.cornell.edu/~mec/2008-2009/TianyiZheng/Birthday.html]
+ *
+ * Assuming that we want to ensure that p(n) never goes over 1 / 1 trillion
+ * we must not write more than 398065730 blocks with the same encryption key,
+ * which is significantly less than the zettabyte of data that ZFS claims to
+ * be able to store. To counteract this, we rotate our keys after 400000000
+ * blocks have been written by generating a new random 64 bit salt for our
+ * HKDF encryption key generation function.
+ */
+unsigned long zfs_key_max_salt_uses = 400000000;
 
 zio_crypt_info_t zio_crypt_table[ZIO_CRYPT_FUNCTIONS] = {
 	{"",			ZC_TYPE_NONE,	0,	"inherit"},
@@ -139,7 +203,7 @@ hkdf_sha512_extract(uint8_t *salt, uint_t salt_len, uint8_t *key_material,
 	crypto_key_t key;
 	crypto_data_t input_cd, output_cd;
 
-	/* initialize sha 256 hmac mechanism */
+	/* initialize HMAC mechanism */
 	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
 	mech.cm_param = NULL;
 	mech.cm_param_len = 0;
@@ -191,7 +255,7 @@ hkdf_sha512_expand(uint8_t *extract_key, uint8_t *info, uint_t info_len,
 	if (N > 255)
 		return (SET_ERROR(EINVAL));
 
-	/* initialize sha 256 hmac mechanism */
+	/* initialize HMAC mechanism */
 	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
 	mech.cm_param = NULL;
 	mech.cm_param_len = 0;
@@ -388,7 +452,7 @@ error:
 static int
 zio_crypt_key_change_salt(zio_crypt_key_t *key)
 {
-	int ret;
+	int ret = 0;
 	uint8_t salt[ZIO_DATA_SALT_LEN];
 	crypto_mechanism_t mech;
 	uint_t keydata_len = zio_crypt_table[key->zk_crypt].ci_keylen;
@@ -400,11 +464,15 @@ zio_crypt_key_change_salt(zio_crypt_key_t *key)
 
 	rw_enter(&key->zk_salt_lock, RW_WRITER);
 
+	/* someone beat us to the salt rotation, just unlock and return */
+	if (key->zk_salt_count < zfs_key_max_salt_uses)
+		goto out_unlock;
+
 	/* derive the current key from the master key and the new salt */
 	ret = hkdf_sha512(key->zk_master_keydata, keydata_len, NULL, 0,
 	    salt, ZIO_DATA_SALT_LEN, key->zk_current_keydata, keydata_len);
 	if (ret != 0)
-		goto error_unlock;
+		goto out_unlock;
 
 	/* assign the salt and reset the usage count */
 	bcopy(salt, key->zk_salt, ZIO_DATA_SALT_LEN);
@@ -421,13 +489,13 @@ zio_crypt_key_change_salt(zio_crypt_key_t *key)
 
 	return (0);
 
-error_unlock:
+out_unlock:
 	rw_exit(&key->zk_salt_lock);
 error:
 	return (ret);
 }
 
-/* See comment above ZIO_CRYPT_MAX_SALT_USAGE definition for details */
+/* See comment above zfs_key_max_salt_uses definition for details */
 int
 zio_crypt_key_get_salt(zio_crypt_key_t *key, uint8_t *salt)
 {
@@ -437,8 +505,8 @@ zio_crypt_key_get_salt(zio_crypt_key_t *key, uint8_t *salt)
 	rw_enter(&key->zk_salt_lock, RW_READER);
 
 	bcopy(key->zk_salt, salt, ZIO_DATA_SALT_LEN);
-	salt_change = (atomic_inc_64_nv(&key->zk_salt_count) ==
-	    ZIO_CRYPT_MAX_SALT_USAGE);
+	salt_change = (atomic_inc_64_nv(&key->zk_salt_count) >=
+	    zfs_key_max_salt_uses);
 
 	rw_exit(&key->zk_salt_lock);
 
@@ -456,11 +524,10 @@ error:
 
 /*
  * This function handles all encryption and decryption in zfs. When
- * encrypting it expects puio to refernce the plaintext and cuio to
- * have enough space for the ciphertext + room for a MAC. On decrypting
- * it expects both puio and cuio to have enough room for a MAC, although
- * the plaintext uio can be dsicarded afterwards. datalen should be the
- * length of only the plaintext / ciphertext in either case.
+ * encrypting it expects puio to reference the plaintext and cuio to
+ * reference the cphertext. cuio must have enough space for the
+ * ciphertext + room for a MAC. datalen should be the length of the
+ * plaintext / ciphertext alone.
  */
 static int
 zio_do_crypt_uio(boolean_t encrypt, uint64_t crypt, crypto_key_t *key,
@@ -539,14 +606,18 @@ zio_do_crypt_uio(boolean_t encrypt, uint64_t crypt, crypto_key_t *key,
 	if (encrypt) {
 		ret = crypto_encrypt(&mech, &plaindata, key, tmpl, &cipherdata,
 		    NULL);
+		if (ret != CRYPTO_SUCCESS) {
+			ret = SET_ERROR(EIO);
+			goto error;
+		}
 	} else {
 		ret = crypto_decrypt(&mech, &cipherdata, key, tmpl, &plaindata,
 		    NULL);
-	}
-
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
+		if (ret != CRYPTO_SUCCESS) {
+			ASSERT3U(ret, ==, CRYPTO_INVALID_MAC);
+			ret = SET_ERROR(ECKSUM);
+			goto error;
+		}
 	}
 
 	return (0);
@@ -889,8 +960,10 @@ zio_crypt_decode_mac_zil(const void *data, uint8_t *mac)
 }
 
 /*
- * This function is modeled off of zio_crypt_init_uios_dnode(). This function,
- * however, copies bonus buffers instead of parsing them into a uio_t.
+ * This routine takes a block of dnodes (src_abd) and copies only the bonus
+ * buffers to the same offsets in the dst buffer. datalen should be the size
+ * of both the src_abd and the dst buffer (not just the length of the bonus
+ * buffers).
  */
 void
 zio_crypt_copy_dnode_bonus(abd_t *src_abd, uint8_t *dst, uint_t datalen)
@@ -1013,8 +1086,8 @@ error:
  * authentication process. objset_phys_t's contain 2 seperate HMACS for
  * protecting the integrity of their data. The portable_mac protects the
  * the metadnode. This MAC can be sent with a raw send and protects against
- * reordering of data within the metadnode. The local_mac protects the the
- * user accounting objects which are not sent from one system to another.
+ * reordering of data within the metadnode. The local_mac protects the user
+ * accounting objects which are not sent from one system to another.
  *
  * In addition, objset blocks are the only blocks that can be modified and
  * written to disk without the key loaded under certain circumstances. During
@@ -1043,7 +1116,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	uint8_t raw_portable_mac[SHA512_DIGEST_LEN];
 	uint8_t raw_local_mac[SHA512_DIGEST_LEN];
 
-	/* initialize sha 256 hmac mechanism */
+	/* initialize HMAC mechanism */
 	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
 	mech.cm_param = NULL;
 	mech.cm_param_len = 0;
@@ -1253,10 +1326,11 @@ zio_crypt_do_indirect_mac_checksum_abd(boolean_t generate, abd_t *abd,
 }
 
 /*
- * We do not check for the older zil chain because this feature was not
- * available before the newer zil chain was introduced. The goal here
+ * Special case handling routine for encrypting / decrypting ZIL blocks.
+ * We do not check for the older ZIL chain because this feature was not
+ * available before the newer ZIL chain was introduced. The goal here
  * is to encrypt everything except the blkptr_t of a lr_write_t and
- * the zil_chain_t header.
+ * the zil_chain_t header. Everything that is not encrypted is authenticated.
  */
 static int
 zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
@@ -1363,6 +1437,11 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 		aadp += sizeof (lr_t);
 		aad_len += sizeof (lr_t);
 
+		/*
+		 * If this is a TX_WRITE record we want to encrypt everything
+		 * except the bp if exists. If the bp does exist we want to
+		 * authenticate it.
+		 */
 		if (txtype == TX_WRITE) {
 			crypt_len = sizeof (lr_write_t) -
 			    sizeof (lr_t) - sizeof (blkptr_t);
@@ -1441,6 +1520,9 @@ error:
 	return (ret);
 }
 
+/*
+ * Special case handling routine for encrypting / decrypting dnode blocks.
+ */
 static int
 zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
     uint8_t *cipherbuf, uint_t datalen, boolean_t byteswap, uio_t *puio,
@@ -1455,7 +1537,7 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 	uint_t aad_len = 0, nr_iovecs = 0, total_len = 0;
 	uint_t i, j, max_dnp = datalen >> DNODE_SHIFT;
 	iovec_t *src_iovecs = NULL, *dst_iovecs = NULL;
-	uint8_t *src, *dst, *bonus, *bonus_end, *dn_end, *aadp;
+	uint8_t *src, *dst, *aadp;
 	dnode_phys_t *dnp, *adnp, *sdnp, *ddnp;
 	uint8_t *aadbuf = zio_buf_alloc(datalen);
 	uint8_t mac[ZIO_DATA_MAC_LEN];
@@ -1476,6 +1558,10 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 	ddnp = (dnode_phys_t *)dst;
 	aadp = aadbuf;
 
+	/*
+	 * Count the number of iovecs we will need to do the encryption by
+	 * counting the number of bonus buffers that need to be encrypted.
+	 */
 	for (i = 0; i < max_dnp; i += sdnp[i].dn_extra_slots + 1) {
 		/*
 		 * This block may still be byteswapped. However, all of the
@@ -1511,52 +1597,31 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 
 	nr_iovecs = 0;
 
+	/*
+	 * Iterate through the dnodes again, this time filling in the uios
+	 * we allocated earlier. We also concatenate any data we want to
+	 * authenticate onto aadbuf.
+	 */
 	for (i = 0; i < max_dnp; i += sdnp[i].dn_extra_slots + 1) {
 		dnp = &sdnp[i];
-		dn_end = (uint8_t *)(dnp + (dnp->dn_extra_slots + 1));
 
-		/*
-		 * Copy everything from the dource to the destination.
-		 * Wherever we find an encrypted bonus buffer type, we prepare
-		 * an iovec_t instead. The encryption / decryption functions
-		 * will replace fill this in for us with the encrypted or
-		 * decrypted data
-		 */
-		if (dnp->dn_type != DMU_OT_NONE &&
-		    DMU_OT_IS_ENCRYPTED(dnp->dn_bonustype) &&
-		    dnp->dn_bonuslen != 0) {
-			bonus = (uint8_t *)DN_BONUS(dnp);
-			if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
-				bonus_end = (uint8_t *)DN_SPILL_BLKPTR(dnp);
-			} else {
-				bonus_end = (uint8_t *)dn_end;
-			}
-			crypt_len = bonus_end - bonus;
+		/* copy over the core fields and blkptrs (kept as plaintext) */
+		bcopy(dnp, &ddnp[i], (uint8_t *)DN_BONUS(dnp) - (uint8_t *)dnp);
 
-			bcopy(dnp, &ddnp[i], bonus - (uint8_t *)dnp);
-			src_iovecs[nr_iovecs].iov_base = bonus;
-			src_iovecs[nr_iovecs].iov_len = crypt_len;
-			dst_iovecs[nr_iovecs].iov_base = DN_BONUS(&ddnp[i]);
-			dst_iovecs[nr_iovecs].iov_len = crypt_len;
-
-			if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
-				bcopy(bonus_end, DN_SPILL_BLKPTR(&ddnp[i]),
-				    sizeof (blkptr_t));
-			}
-
-			nr_iovecs++;
-			total_len += crypt_len;
-		} else {
-			bcopy(dnp, &ddnp[i], dn_end - (uint8_t *)dnp);
+		if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
+			bcopy(DN_SPILL_BLKPTR(dnp), DN_SPILL_BLKPTR(&ddnp[i]),
+			    sizeof (blkptr_t));
 		}
 
 		/*
 		 * Handle authenticated data. We authenticate everything in
 		 * the dnode that can be brought over when we do a raw send.
 		 * This includes all of the core fields as well as the MACs
-		 * stored in the bp checksums. We also include the padding
-		 * here in case it ever gets used in the future. Some of
-		 * dn_flags and dn_used are not portable so we mask those out.
+		 * stored in the bp checksums and all of the portable bits
+		 * from blk_prop. We include the dnode padding here in case it
+		 * ever gets used in the future. Some dn_flags and dn_used are
+		 * not portable so we mask those out values out of the
+		 * authenticated data.
 		 */
 		crypt_len = offsetof(dnode_phys_t, dn_blkptr);
 		bcopy(dnp, aadp, crypt_len);
@@ -1599,6 +1664,31 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 			zio_crypt_decode_mac_bp(bp, mac);
 			crypt_len = ZIO_DATA_MAC_LEN;
 			bcopy(mac, aadp, crypt_len);
+			aadp += crypt_len;
+			aad_len += crypt_len;
+		}
+
+		/*
+		 * If this bonus buffer needs to be encrypted, we prepare an
+		 * iovec_t. The encryption / decryption functions will fill
+		 * this in for us with the encrypted or decrypted data.
+		 * Otherwise we add the bonus buffer to the authenticated
+		 * data buffer and copy it over to the destination.
+		 */
+		crypt_len = DN_MAX_BONUS_LEN(dnp);
+		if (dnp->dn_type != DMU_OT_NONE &&
+		    DMU_OT_IS_ENCRYPTED(dnp->dn_bonustype) &&
+		    dnp->dn_bonuslen != 0) {
+			src_iovecs[nr_iovecs].iov_base = DN_BONUS(dnp);
+			src_iovecs[nr_iovecs].iov_len = crypt_len;
+			dst_iovecs[nr_iovecs].iov_base = DN_BONUS(&ddnp[i]);
+			dst_iovecs[nr_iovecs].iov_len = crypt_len;
+
+			nr_iovecs++;
+			total_len += crypt_len;
+		} else {
+			bcopy(DN_BONUS(dnp), DN_BONUS(&ddnp[i]), crypt_len);
+			bcopy(DN_BONUS(dnp), aadp, crypt_len);
 			aadp += crypt_len;
 			aad_len += crypt_len;
 		}
@@ -1692,6 +1782,14 @@ error:
 	return (ret);
 }
 
+/*
+ * This function builds up the plaintext (puio) and ciphertext (cuio) uios so
+ * that they can be used for encryption and decryption by zio_do_crypt_uio().
+ * Most blocks will use zio_crypt_init_uios_normal(), with ZIL and dnode blocks
+ * requiring special handling to parse out pieces that are to be encrypted. The
+ * authbuf is used by these special cases to store additional authenticated
+ * data (AAD) for the encryption modes.
+ */
 static int
 zio_crypt_init_uios(boolean_t encrypt, dmu_object_type_t ot, uint8_t *plainbuf,
     uint8_t *cipherbuf, uint_t datalen, boolean_t byteswap, uint8_t *mac,
@@ -1879,3 +1977,11 @@ error:
 
 	return (ret);
 }
+
+#if defined(_KERNEL) && defined(HAVE_SPL)
+/* BEGIN CSTYLED */
+module_param(zfs_key_max_salt_uses, ulong, 0644);
+MODULE_PARM_DESC(zfs_key_max_salt_uses, "Max number of times a salt value "
+	"can be used for generating encryption keys before it is rotated");
+/* END CSTYLED */
+#endif

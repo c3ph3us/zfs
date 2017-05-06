@@ -576,7 +576,7 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 	/* do user accounting if it is enabled and this is not a raw recv */
 	if (dmu_objset_userused_enabled(os) &&
 	    !DMU_OBJECT_IS_SPECIAL(dn->dn_object) &&
-	    (!os->os_encrypted || dmu_objset_key_mapped(os))) {
+	    (!os->os_encrypted || !os->os_receiving)) {
 		mutex_enter(&dn->dn_mtx);
 		dn->dn_oldused = DN_USED_BYTES(dn->dn_phys);
 		dn->dn_oldflags = dn->dn_phys->dn_flags;

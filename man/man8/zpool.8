@@ -1301,7 +1301,7 @@ Indicates that this command will request encryption keys for all encrypted
 datasets it attempts to mount as it is bringing the pool online. Note that
 if any datasets have a \fBkeylocation\fR of \fBprompt\fR this command will
 block waiting for the keys to be entered. Without this flag encrypted datasets
-will be left unavailable until the keys are loaded.
+will be left unavailable and unmounted until the keys are loaded.
 .RE
 
 .sp

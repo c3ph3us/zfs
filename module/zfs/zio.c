@@ -424,8 +424,8 @@ zio_decrypt(zio_t *zio, abd_t *data, uint64_t size)
 
 		if (BP_GET_COMPRESS(bp) != ZIO_COMPRESS_OFF) {
 			/*
-			 * We haven't decompressed the data yet, but we need
-			 * the zio_crypt_do_indirect_mac_checksum() requires
+			 * We haven't decompressed the data yet, but
+			 * zio_crypt_do_indirect_mac_checksum() requires
 			 * decompressed data to be able to parse out the MACs
 			 * from the indirect block. We decompress it now and
 			 * throw away the result after we are finished.
@@ -499,7 +499,20 @@ zio_decrypt(zio_t *zio, abd_t *data, uint64_t size)
 error:
 	/* assert that the key was found unless this was speculative */
 	ASSERT(ret != ENOENT || (zio->io_flags & ZIO_FLAG_SPECULATIVE));
-	zio->io_error = ret;
+
+	/*
+	 * If there was a decryption / authentication error return EIO as
+	 * the io_error. If this was not a speculative zio, create an ereport.
+	 */
+	if (ret == ECKSUM) {
+		ret = SET_ERROR(EIO);
+		if ((zio->io_flags & ZIO_FLAG_SPECULATIVE) == 0) {
+			zfs_ereport_post(FM_EREPORT_ZFS_AUTHENTICATION,
+			    zio->io_spa, NULL, &zio->io_bookmark, zio, 0, 0);
+		}
+	} else {
+		zio->io_error = ret;
+	}
 }
 
 /*
@@ -1563,6 +1576,8 @@ zio_write_compress(zio_t *zio)
 		if (zp->zp_dedup) {
 			ASSERT(zio->io_child_type == ZIO_CHILD_LOGICAL);
 			ASSERT(!(zio->io_flags & ZIO_FLAG_IO_REWRITE));
+			ASSERT(!zp->zp_encrypt ||
+			    DMU_OT_IS_ENCRYPTED(zp->zp_type));
 			zio->io_pipeline = ZIO_DDT_WRITE_PIPELINE;
 		}
 		if (zp->zp_nopwrite) {
@@ -1986,7 +2001,8 @@ zio_suspend(spa_t *spa, zio_t *zio)
 	cmn_err(CE_WARN, "Pool '%s' has encountered an uncorrectable I/O "
 	    "failure and has been suspended.\n", spa_name(spa));
 
-	zfs_ereport_post(FM_EREPORT_ZFS_IO_FAILURE, spa, NULL, NULL, 0, 0);
+	zfs_ereport_post(FM_EREPORT_ZFS_IO_FAILURE, spa, NULL,
+	    NULL, NULL, 0, 0);
 
 	mutex_enter(&spa->spa_suspend_lock);
 
@@ -3642,8 +3658,7 @@ zio_encrypt(zio_t *zio)
 		return (ZIO_PIPELINE_CONTINUE);
 
 	/* only ZIL blocks are re-encrypted on rewrite */
-	if (!IO_IS_ALLOCATING(zio) &&
-	    BP_GET_TYPE(bp) != DMU_OT_INTENT_LOG)
+	if (!IO_IS_ALLOCATING(zio) && ot != DMU_OT_INTENT_LOG)
 		return (ZIO_PIPELINE_CONTINUE);
 
 	if (!(zp->zp_encrypt || BP_IS_ENCRYPTED(bp))) {
@@ -3812,8 +3827,8 @@ zio_checksum_verify(zio_t *zio)
 		if (error == ECKSUM &&
 		    !(zio->io_flags & ZIO_FLAG_SPECULATIVE)) {
 			zfs_ereport_start_checksum(zio->io_spa,
-			    zio->io_vd, zio, zio->io_offset,
-			    zio->io_size, NULL, &info);
+			    zio->io_vd, &zio->io_bookmark, zio,
+			    zio->io_offset, zio->io_size, NULL, &info);
 		}
 	}
 
@@ -4112,7 +4127,7 @@ zio_done(zio_t *zio)
 	if (zio->io_delay >= MSEC2NSEC(zio_delay_max)) {
 		if (zio->io_vd != NULL && !vdev_is_dead(zio->io_vd))
 			zfs_ereport_post(FM_EREPORT_ZFS_DELAY, zio->io_spa,
-			    zio->io_vd, zio, 0, 0);
+			    zio->io_vd, &zio->io_bookmark, zio, 0, 0);
 	}
 
 	if (zio->io_error) {
@@ -4125,7 +4140,7 @@ zio_done(zio_t *zio)
 		if (zio->io_error != ECKSUM && zio->io_vd != NULL &&
 		    !vdev_is_dead(zio->io_vd))
 			zfs_ereport_post(FM_EREPORT_ZFS_IO, zio->io_spa,
-			    zio->io_vd, zio, 0, 0);
+			    zio->io_vd, &zio->io_bookmark, zio, 0, 0);
 
 		if ((zio->io_error == EIO || !(zio->io_flags &
 		    (ZIO_FLAG_SPECULATIVE | ZIO_FLAG_DONT_PROPAGATE))) &&
@@ -4134,9 +4149,9 @@ zio_done(zio_t *zio)
 			 * For logical I/O requests, tell the SPA to log the
 			 * error and generate a logical data ereport.
 			 */
-			spa_log_error(zio->io_spa, zio);
+			spa_log_error(zio->io_spa, &zio->io_bookmark);
 			zfs_ereport_post(FM_EREPORT_ZFS_DATA, zio->io_spa,
-			    NULL, zio, 0, 0);
+			    NULL, &zio->io_bookmark, zio, 0, 0);
 		}
 	}
 

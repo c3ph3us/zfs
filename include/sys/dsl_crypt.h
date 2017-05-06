@@ -41,7 +41,10 @@
 #define	DSL_CRYPTO_KEY_REFCOUNT		"DSL_CRYPTO_REFCOUNT"
 
 
-/* in memory representation of a wrapping key */
+/*
+ * In-memory representation of a wrapping key. One of these structs will exist
+ * for each encryption root with its key loaded.
+ */
 typedef struct dsl_wrapping_key {
 	/* link on spa_keystore_t:sk_wkeys */
 	avl_node_t wk_avl_link;
@@ -49,7 +52,7 @@ typedef struct dsl_wrapping_key {
 	/* keyformat property enum */
 	zfs_keyformat_t wk_keyformat;
 
-	/* the pckdf2 salt, if the keyformat is of type passphrase */
+	/* the pbkdf2 salt, if the keyformat is of type passphrase */
 	uint64_t wk_salt;
 
 	/* the pbkdf2 iterations, if the keyformat is of type passphrase */
@@ -99,7 +102,11 @@ typedef struct dsl_crypto_params {
 	dsl_wrapping_key_t *cp_wkey;
 } dsl_crypto_params_t;
 
-/* in-memory representation of an encryption key for a dataset */
+/*
+ * In-memory representation of a DSL Crypto Key object. One of these structs
+ * (and corresponding on-disk ZAP object) will exist for each encrypted
+ * clone family that is mounted or otherwise reading protected data.
+ */
 typedef struct dsl_crypto_key {
 	/* link on spa_keystore_t:sk_dsl_keys */
 	avl_node_t dck_avl_link;
@@ -118,9 +125,9 @@ typedef struct dsl_crypto_key {
 } dsl_crypto_key_t;
 
 /*
- * In memory mapping of a dataset to a DSL Crypto Key. This is used
- * to look up the corresponding dsl_crypto_key_t from the zio layer
- * for performing data encryption and decryption.
+ * In-memory mapping of a dataset object id to a DSL Crypto Key. This is used
+ * to look up the corresponding dsl_crypto_key_t from the zio layer for
+ * performing data encryption and decryption.
  */
 typedef struct dsl_key_mapping {
 	/* link on spa_keystore_t:sk_key_mappings */

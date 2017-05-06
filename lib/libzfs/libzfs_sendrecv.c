@@ -2383,7 +2383,7 @@ recv_promote(libzfs_handle_t *hdl, const char *fsname,
 	(void) strlcpy(zc.zc_name, fsname, sizeof (zc.zc_name));
 
 	/*
-	 * Attempt the promote the dataset. If it fails with EACCES the
+	 * Attempt to promote the dataset. If it fails with EACCES the
 	 * promotion would cause this dataset to leave its encryption root.
 	 * Force the origin to become an encryption root and try again.
 	 */
@@ -2616,10 +2616,10 @@ created_before(libzfs_handle_t *hdl, avl_tree_t *avl,
 }
 
 /*
- * This function reestablishes the heirarchy of encryption roots afetr a full
- * incremental receive has completed. This must be done after the second call
- * to recv_incremental_replication() has renamed and promoted all sent datasets
- * to everything is in its correct place.
+ * This function reestablishes the heirarchy of encryption roots after a
+ * recursive incremental receive has completed. This must be done after the
+ * second call to recv_incremental_replication() has renamed and promoted all
+ * sent datasets to their final locations in the dataset heriarchy.
  */
 static int
 recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, const char *destname,
