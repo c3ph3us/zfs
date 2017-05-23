@@ -1305,8 +1305,8 @@ error:
 
 
 static void
-spa_keystore_change_key_sync_impl(dcp_cmd_t cmd, uint64_t rddobj,
-    uint64_t ddobj, uint64_t new_rddobj, dsl_wrapping_key_t *wkey, dmu_tx_t *tx)
+spa_keystore_change_key_sync_impl(uint64_t rddobj, uint64_t ddobj,
+    uint64_t new_rddobj, dsl_wrapping_key_t *wkey, dmu_tx_t *tx)
 {
 	zap_cursor_t *zc;
 	zap_attribute_t *za;
@@ -1355,17 +1355,27 @@ spa_keystore_change_key_sync_impl(dcp_cmd_t cmd, uint64_t rddobj,
 	zc = kmem_alloc(sizeof (zap_cursor_t), KM_SLEEP);
 	za = kmem_alloc(sizeof (zap_attribute_t), KM_SLEEP);
 
-	/*
-	 * Recurse into all children dsl dirs. We don't need to recurse into
-	 * clones as well since they will share their DSL Crypto Key with the
-	 * parent.
-	 */
+	/* Recurse into all child and clone dsl dirs. */
 	for (zap_cursor_init(zc, dp->dp_meta_objset,
 	    dsl_dir_phys(dd)->dd_child_dir_zapobj);
 	    zap_cursor_retrieve(zc, za) == 0;
 	    zap_cursor_advance(zc)) {
-		spa_keystore_change_key_sync_impl(cmd, rddobj,
+		spa_keystore_change_key_sync_impl(rddobj,
 		    za->za_first_integer, new_rddobj, wkey, tx);
+	}
+	zap_cursor_fini(zc);
+
+	for (zap_cursor_init(zc, dp->dp_meta_objset,
+	    dsl_dir_phys(dd)->dd_clones);
+	    zap_cursor_retrieve(zc, za) == 0;
+	    zap_cursor_advance(zc)) {
+		dsl_dataset_t *clone;
+
+		VERIFY0(dsl_dataset_hold_obj(dp,
+		    za->za_first_integer, FTAG, &clone));
+		spa_keystore_change_key_sync_impl(rddobj,
+		    clone->ds_dir->dd_object, new_rddobj, wkey, tx);
+		dsl_dataset_rele(clone, FTAG);
 	}
 	zap_cursor_fini(zc);
 
@@ -1443,8 +1453,8 @@ spa_keystore_change_key_sync(void *arg, dmu_tx_t *tx)
 	rw_enter(&spa->spa_keystore.sk_wkeys_lock, RW_WRITER);
 
 	/* recurse through all children and rewrap their keys */
-	spa_keystore_change_key_sync_impl(dcp->cp_cmd, rddobj,
-	    ds->ds_dir->dd_object, new_rddobj, wkey, tx);
+	spa_keystore_change_key_sync_impl(rddobj, ds->ds_dir->dd_object,
+	    new_rddobj, wkey, tx);
 
 	/*
 	 * All references to the old wkey should be released now (if it
@@ -1554,7 +1564,7 @@ dsl_dataset_promote_crypt_check(dsl_dir_t *target, dsl_dir_t *origin)
 		return (0);
 
 	/*
-	 * If the origin is the encryption root we will simply update
+	 * If the origin is the encryption root we will update
 	 * the DSL Crypto Key to point to the target instead.
 	 */
 	ret = dsl_dir_get_encryption_root_ddobj(origin, &rddobj);
@@ -1587,22 +1597,51 @@ dsl_dataset_promote_crypt_sync(dsl_dir_t *target, dsl_dir_t *origin,
     dmu_tx_t *tx)
 {
 	uint64_t rddobj;
+	dsl_pool_t *dp = target->dd_pool;
+	dsl_dataset_t *targetds;
+	dsl_dataset_t *originds;
+	char *keylocation;
 
+	if (origin->dd_crypto_obj == 0)
+		return;
 	if (dsl_dir_is_clone(origin))
 		return;
 
 	VERIFY0(dsl_dir_get_encryption_root_ddobj(origin, &rddobj));
 
+	if (rddobj != origin->dd_object)
+		return;
+
 	/*
 	 * If the target is being promoted to the encyrption root update the
-	 * DSL Crypto Key to reflect that. Otherwise, the check function
-	 * ensured that the encryption root did not change.
+	 * DSL Crypto Key and keylocation to reflect that. We also need to
+	 * update the DSL Crypto Keys of all children inheritting their
+	 * encryption root to point to the new target. Otherwise, the check
+	 * function ensured that the encryption root will not change.
 	 */
-	if (rddobj == origin->dd_object) {
-		VERIFY0(zap_update(target->dd_pool->dp_meta_objset,
-		    target->dd_crypto_obj, DSL_CRYPTO_KEY_ROOT_DDOBJ, 8, 1,
-		    &target->dd_object, tx));
-	}
+	keylocation = kmem_alloc(ZAP_MAXVALUELEN, KM_SLEEP);
+
+	VERIFY0(dsl_dataset_hold_obj(dp,
+	    dsl_dir_phys(target)->dd_head_dataset_obj, FTAG, &targetds));
+	VERIFY0(dsl_dataset_hold_obj(dp,
+	    dsl_dir_phys(origin)->dd_head_dataset_obj, FTAG, &originds));
+
+	VERIFY0(dsl_prop_get_dd(origin,
+	    zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
+	    1, sizeof (keylocation), keylocation, NULL, B_FALSE));
+	dsl_prop_set_sync_impl(targetds, zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
+	    ZPROP_SRC_LOCAL, 1, strlen(keylocation) + 1, keylocation, tx);
+	dsl_prop_set_sync_impl(originds, zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
+	    ZPROP_SRC_NONE, 0, 0, NULL, tx);
+
+	rw_enter(&dp->dp_spa->spa_keystore.sk_wkeys_lock, RW_WRITER);
+	spa_keystore_change_key_sync_impl(rddobj, origin->dd_object,
+	    target->dd_object, NULL, tx);
+	rw_exit(&dp->dp_spa->spa_keystore.sk_wkeys_lock);
+
+	dsl_dataset_rele(targetds, FTAG);
+	dsl_dataset_rele(originds, FTAG);
+	kmem_free(keylocation, ZAP_MAXVALUELEN);
 }
 
 int
@@ -2418,12 +2457,13 @@ spa_do_crypt_objset_mac_abd(boolean_t generate, spa_t *spa, uint64_t dsobj,
 		return (0);
 	}
 
-	abd_return_buf(abd, buf, datalen);
-
 	if (bcmp(portable_mac, osp->os_portable_mac, ZIO_OBJSET_MAC_LEN) != 0 ||
 	    bcmp(local_mac, osp->os_local_mac, ZIO_OBJSET_MAC_LEN) != 0) {
+		abd_return_buf(abd, buf, datalen);
 		return (SET_ERROR(ECKSUM));
 	}
+
+	abd_return_buf(abd, buf, datalen);
 
 	return (0);
 

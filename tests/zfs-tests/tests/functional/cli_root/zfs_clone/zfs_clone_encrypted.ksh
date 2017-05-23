@@ -32,10 +32,11 @@
 # 4. Attempt to clone the snapshot with a new key
 # 5. Attempt to clone the snapshot as a child of an unencrypted dataset
 # 6. Attempt to clone the snapshot as a child of an encrypted dataset
-# 7. Unmount all datasets and unload their keys
-# 8. Attempt to load the encryption root's key
-# 9. Verify each dataset's key is loaded
-# 10. Attempt to mount each dataset
+# 7. Verify the encryption root of the datasets
+# 8. Unmount all datasets and unload their keys
+# 9. Attempt to load the encryption root's key
+# 10. Verify each dataset's key is loaded
+# 11. Attempt to mount each dataset
 #
 
 verify_runnable "both"
@@ -61,6 +62,9 @@ log_mustnot eval "echo $PASSPHRASE1 | zfs clone -o keyformat=passphrase" \
 	"$TESTPOOL/$TESTFS1@now $TESTPOOL/$TESTFS2"
 log_must zfs clone $TESTPOOL/$TESTFS1@now $TESTPOOL/$TESTFS2
 log_must zfs clone $TESTPOOL/$TESTFS1@now $TESTPOOL/$TESTFS1/child
+
+log_must verify_encryption_root $TESTPOOL/$TESTFS2 $TESTPOOL/$TESTFS1
+log_must verify_encryption_root $TESTPOOL/$TESTFS1/child $TESTPOOL/$TESTFS1
 
 log_must zfs unmount $TESTPOOL/$TESTFS1
 log_must zfs unmount $TESTPOOL/$TESTFS2

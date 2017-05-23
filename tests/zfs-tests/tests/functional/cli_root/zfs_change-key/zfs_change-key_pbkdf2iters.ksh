@@ -26,10 +26,10 @@
 # 'zfs change-key -o' should change the pbkdf2 iterations.
 #
 # STRATEGY:
-# 1. Create an encryption dataset with a file key location
+# 1. Create an encryption dataset with 200k PBKDF2 iterations
 # 2. Unmount the dataset
-# 3. Change the key location to prompt
-# 4. Verify the key location
+# 3. Change the PBKDF2 iterations to 150k
+# 4. Verify the PBKDF2 iterations
 # 5. Unload the dataset's key
 # 6. Attempt to load the dataset's key
 #

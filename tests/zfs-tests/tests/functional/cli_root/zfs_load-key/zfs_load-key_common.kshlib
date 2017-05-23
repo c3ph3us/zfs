@@ -47,6 +47,19 @@ function key_unavailable
 	return 0
 }
 
+function verify_keyformat
+{
+	typeset ds=$1
+	typeset format=$2
+	typeset fmt=$(get_prop keyformat $ds)
+
+	if [[ "$fmt" != "$format" ]]; then
+		log_fail "Expected keyformat $format, got $fmt"
+	fi
+
+	return 0
+}
+
 function verify_keylocation
 {
 	typeset ds=$1
@@ -55,6 +68,34 @@ function verify_keylocation
 
 	if [[ "$keyloc" != "$location" ]]; then
 		log_fail "Expected keylocation $location, got $keyloc"
+	fi
+
+	return 0
+}
+
+function verify_encryption_root
+{
+	typeset ds=$1
+	typeset val=$2
+	typeset eroot=$(get_prop encryptionroot $ds)
+
+	if [[ "$eroot" != "$val" ]]; then
+		log_note "Expected encryption root '$val', got '$eroot'"
+		return 1
+	fi
+
+	return 0
+}
+
+function verify_origin
+{
+	typeset ds=$1
+	typeset val=$2
+	typeset orig=$(get_prop origin $ds)
+
+	if [[ "$orig" != "$val" ]]; then
+		log_note "Expected origin '$val', got '$orig'"
+		return 1
 	fi
 
 	return 0

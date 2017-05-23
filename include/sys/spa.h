@@ -299,12 +299,12 @@ typedef struct zio_cksum_salt {
  * malicious disk tampering. We use the 3rd DVA to store the salt and first
  * 64 bits of the IV. As a result encrypted blocks can only have 2 copies
  * maximum instead of the normal 3. The last 32 bits of the IV are stored in
- * the upper bits of what is usually the fill count. Note that only blocks with
- * level < 0 are ever encrypted, which allows us to guarantee that these 32 bits
- * are not trampled over by other code (see zio_crypt.c for details). The salt
- * and IV are not used for authenticated bps or bps with an indirect MAC
- * checksum, so these blocks can utilize all 3 copies and the full 64 bits for
- * the fill count.
+ * the upper bits of what is usually the fill count. Note that only blocks at
+ * level 0 or -2 are ever encrypted, which allows us to guarantee that these
+ * 32 bits are not trampled over by other code (see zio_crypt.c for details).
+ * The salt and IV are not used for authenticated bps or bps with an indirect
+ * MAC checksum, so these blocks can utilize all 3 DVAs and the full 64 bits
+ * for the fill count.
  */
 
 /*

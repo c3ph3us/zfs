@@ -30,11 +30,9 @@
 # 3. Create a file and get its checksum
 # 4. Snapshot the dataset
 # 5. Attempt to receive a raw send stream of the first snapshot
-# XXX: ???
 # 6. Attempt to receive a raw incremental send stream of the second snapshot
 # 7. Attempt load the key and mount the dataset
-# 8. Attempt to receive a raw incremental send stream of the second snapshot
-# 9. Verify the cheksum of the file is the same as the original
+# 8. Verify the cheksum of the file is the same as the original
 #
 
 verify_runnable "both"
@@ -62,8 +60,7 @@ log_must eval "echo $passphrase | zfs create -o encryption=on" \
 log_must zfs snapshot $snap1
 
 log_must mkfile 1M /$TESTPOOL/$TESTFS1/$TESTFILE0
-typeset checksum=$(md5sum /$TESTPOOL/$TESTFS1/$TESTFILE0 | \
-	awk '{ print $1 }')
+typeset checksum=$(md5sum /$TESTPOOL/$TESTFS1/$TESTFILE0 | awk '{ print $1 }')
 
 log_must zfs snapshot $snap2
 

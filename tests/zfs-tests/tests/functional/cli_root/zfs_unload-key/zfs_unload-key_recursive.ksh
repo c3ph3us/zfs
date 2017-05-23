@@ -27,13 +27,13 @@
 #
 # STRATEGY:
 # 1. Create a parent encrypted dataset
-# 3. Create a sibling encrypted dataset
-# 2. Create a child dataset as an encryption root
-# 3. Unmount all datasets
-# 4. Attempt to unload all dataset keys under parent
-# 5. Verify parent and child have their keys unloaded
-# 6. Verify sibling has its key loaded
-# 7. Attempt to mount all datasets
+# 2. Create a sibling encrypted dataset
+# 3. Create a child dataset as an encryption root
+# 4. Unmount all datasets
+# 5. Attempt to unload all dataset keys under parent
+# 6. Verify parent and child have their keys unloaded
+# 7. Verify sibling has its key loaded
+# 8. Attempt to mount all datasets
 #
 
 verify_runnable "both"

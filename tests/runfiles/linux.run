@@ -124,7 +124,7 @@ tests = ['zfs_mount_001_pos', 'zfs_mount_002_pos', 'zfs_mount_003_pos',
 [tests/functional/cli_root/zfs_promote]
 tests = ['zfs_promote_001_pos', 'zfs_promote_002_pos', 'zfs_promote_003_pos',
     'zfs_promote_004_pos', 'zfs_promote_005_pos', 'zfs_promote_006_neg',
-    'zfs_promote_007_neg', 'zfs_promote_008_pos']
+    'zfs_promote_007_neg', 'zfs_promote_008_pos', 'zfs_promote_encryptionroot']
 
 [tests/functional/cli_root/zfs_property]
 tests = ['zfs_written_property_001_pos']
@@ -160,8 +160,7 @@ tests = ['zfs_rollback_001_pos', 'zfs_rollback_002_pos',
 [tests/functional/cli_root/zfs_send]
 tests = ['zfs_send_001_pos', 'zfs_send_002_pos', 'zfs_send_003_pos',
     'zfs_send_004_neg', 'zfs_send_005_pos', 'zfs_send_006_pos',
-    'zfs_send_007_pos', 'zfs_send_encrypted',
-    'zfs_send_encrypted_unloaded', 'zfs_send_raw']
+    'zfs_send_007_pos', 'zfs_send_encrypted', 'zfs_send_raw']
 
 [tests/functional/cli_root/zfs_set]
 tests = ['cache_001_pos', 'cache_002_neg', 'canmount_001_pos',
@@ -515,7 +514,7 @@ tests = ['rsend_001_pos', 'rsend_002_pos', 'rsend_003_pos', 'rsend_004_pos',
     'send-c_lz4_disabled', 'send-c_recv_lz4_disabled',
     'send-c_mixed_compression', 'send-c_stream_size_estimate', 'send-cD',
     'send-c_embedded_blocks', 'send-c_resume', 'send-cpL_varied_recsize',
-    'send-c_recv_dedup']
+    'send-c_recv_dedup', 'send_encrypted_heirarchy']
 
 [tests/functional/scrub_mirror]
 tests = ['scrub_mirror_001_pos', 'scrub_mirror_002_pos',

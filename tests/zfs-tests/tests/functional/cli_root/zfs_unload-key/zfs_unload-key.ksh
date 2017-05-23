@@ -35,6 +35,7 @@
 # 7. Unmount the dataset
 # 8. Attempt to unload the dataset's key
 # 9. Verify the key is not loaded
+# 10. Attempt to unload the dataset's key
 #
 
 verify_runnable "both"

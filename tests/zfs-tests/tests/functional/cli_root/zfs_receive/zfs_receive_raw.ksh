@@ -29,11 +29,13 @@
 # 2. Create a file and get its checksum
 # 3. Snapshot the dataset
 # 4. Attempt to receive a raw send stream as a child of an unencrypted dataset
-# 5. Attempt to load the key and mount the dataset
-# 6. Verify the cheksum of the file is the same as the original
-# 7. Attempt to receive a raw send stream as a child of an encrypted dataset
-# 8. Attempt to load the key and mount the dataset
-# 9. Verify the cheksum of the file is the same as the original
+# 5. Verify the key is unavailable
+# 6. Attempt to load the key and mount the dataset
+# 7. Verify the cheksum of the file is the same as the original
+# 8. Attempt to receive a raw send stream as a child of an encrypted dataset
+# 9. Verify the key is unavailable
+# 10. Attempt to load the key and mount the dataset
+# 11. Verify the cheksum of the file is the same as the original
 #
 
 verify_runnable "both"
@@ -71,6 +73,7 @@ keystatus=$(get_prop keystatus $TESTPOOL/$TESTFS2)
 	log_fail "Expected keystatus unavailable, got $keystatus"
 
 log_must eval "echo $passphrase | zfs mount -l $TESTPOOL/$TESTFS2"
+
 typeset cksum1=$(md5sum /$TESTPOOL/$TESTFS2/$TESTFILE0 | awk '{ print $1 }')
 [[ "$cksum1" == "$checksum" ]] || \
 	log_fail "Checksums differ ($cksum1 != $checksum)"

@@ -32,8 +32,9 @@
 # 3. Attempt a send
 # 4. Attempt a send with properties
 # 5. Attempt a replication send
-# 7. Unmount and unload the parent key
-# 8. Attempt a send of the child encryption root
+# 7. Unmount the parent and unload its key
+# 8. Attempt a send of the parent dataset
+# 9. Attempt a send of the child encryption root
 #
 
 verify_runnable "both"
@@ -55,18 +56,21 @@ typeset snap="$TESTPOOL/$TESTFS1@snap"
 
 log_must eval "echo $passphrase | zfs create -o encryption=on" \
 	"-o keyformat=passphrase $TESTPOOL/$TESTFS1"
-log_must zfs snapshot -r $snap
-
-log_must eval "zfs send $snap > /dev/null"
-log_mustnot eval "zfs send $snap -p > /dev/null"
-log_mustnot eval "zfs send $snap -R > /dev/null"
 
 log_must eval "echo $passphrase1 | zfs create -o encryption=on" \
 	"-o keyformat=passphrase $TESTPOOL/$TESTFS1/child"
 
+log_must zfs snapshot -r $snap
+
+log_must eval "zfs send $snap > /dev/null"
+log_mustnot eval "zfs send -p $snap > /dev/null"
+log_mustnot eval "zfs send -R $snap > /dev/null"
+
 log_must zfs unmount $TESTPOOL/$TESTFS1
 log_must zfs unload-key $TESTPOOL/$TESTFS1
-log_must eval "zfs send $TESTPOOL/$TESTFS1/child > /dev/null"
+
+log_mustnot eval "zfs send $snap > /dev/null"
+log_must eval "zfs send $TESTPOOL/$TESTFS1/child@snap > /dev/null"
 
 log_pass "ZFS performs unencrypted sends of encrypted datasets, unless the" \
 	"'-p' or '-R' options are specified"

@@ -39,19 +39,6 @@
 
 verify_runnable "both"
 
-function verify_keyformat
-{
-	typeset ds=$1
-	typeset format=$2
-	typeset fmt=$(get_prop keyformat $ds)
-
-	if [[ "$fmt" != "$format" ]]; then
-		log_fail "Expected keyformat $format, got $fmt"
-	fi
-
-	return 0
-}
-
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \

@@ -2,27 +2,16 @@
 #
 # CDDL HEADER START
 #
-# The contents of this file are subject to the terms of the
-# Common Development and Distribution License (the "License").
-# You may not use this file except in compliance with the License.
+# This file and its contents are supplied under the terms of the
+# Common Development and Distribution License ("CDDL"), version 1.0.
+# You may only use this file in accordance with the terms of version
+# 1.0 of the CDDL.
 #
-# You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
-# or http://www.opensolaris.org/os/licensing.
-# See the License for the specific language governing permissions
-# and limitations under the License.
-#
-# When distributing Covered Code, include this CDDL HEADER in each
-# file and include the License file at usr/src/OPENSOLARIS.LICENSE.
-# If applicable, add the following below this CDDL HEADER, with the
-# fields enclosed by brackets "[]" replaced with your own identifying
-# information: Portions Copyright [yyyy] [name of copyright owner]
+# A full copy of the text of the CDDL should have accompanied this
+# source.  A copy of the CDDL is also available via the Internet at
+# http://www.illumos.org/license/CDDL.
 #
 # CDDL HEADER END
-#
-
-#
-# Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
-# Use is subject to license terms.
 #
 
 #
@@ -30,6 +19,7 @@
 #
 
 . $STF_SUITE/include/libtest.shlib
+. $STF_SUITE/tests/functional/cli_root/zfs_load-key/zfs_load-key_common.kshlib
 
 #
 # DESCRIPTION:
@@ -38,33 +28,35 @@
 # STRATEGY:
 # 1. Create an encrypted dataset
 # 2. Unmount and unload the dataset's key
-# 3. Attempt to mount the dataset
-# 4. Verify the key is loaded correctly
+# 3. Verify the key is unloaded
+# 4. Attempt to load the key while mounting the dataset
+# 5. Verify the key is loaded
+# 6. Verify the dataset is mounted
 #
 
 verify_runnable "both"
 
-typeset CRYPTDS="cryptds"
-typeset PASSKEY="abcdefgh"
-
 function cleanup
 {
-	datasetexists $TESTPOOL/$CRYPTDS && \
-		log_must zfs destroy -f $TESTPOOL/$CRYPTDS
+	datasetexists $TESTPOOL/$TESTFS1 && \
+		log_must zfs destroy -f $TESTPOOL/$TESTFS1
 }
 
 log_onexit cleanup
 
 log_assert "'zfs mount -l' should properly load a valid wrapping key"
 
-log_must eval 'echo $PASSKEY | zfs create -o encryption=on \
-	-o keyformat=passphrase $TESTPOOL/$CRYPTDS'
+log_must eval "echo $PASSPHRASE | zfs create -o encryption=on" \
+	"-o keyformat=passphrase $TESTPOOL/$TESTFS1"
 
-log_must zfs unmount $TESTPOOL/$CRYPTDS
-log_must zfs unload-key $TESTPOOL/$CRYPTDS
+log_must zfs unmount $TESTPOOL/$TESTFS1
+log_must zfs unload-key $TESTPOOL/$TESTFS1
+log_must key_unavailable $TESTPOOL/$TESTFS1
 
-log_must eval 'echo $PASSKEY | zfs mount -l $TESTPOOL/$CRYPTDS'
-mounted $TESTPOOL/$CRYPTDS || \
-	log_fail "Filesystem $TESTPOOL/$TESTFS is unmounted"
+log_must eval "echo $PASSPHRASE | zfs mount -l $TESTPOOL/$TESTFS1"
+log_must key_available $TESTPOOL/$TESTFS1
+
+mounted $TESTPOOL/$TESTFS1 || \
+	log_fail "Filesystem $TESTPOOL/$TESTFS1 is unmounted"
 
 log_pass "'zfs mount -l' properly loads a valid wrapping key"

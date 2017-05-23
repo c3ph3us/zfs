@@ -40,24 +40,24 @@
  * The unencrypted data that we want to encrypt.
  *
  * Initialization Vector (IV):
- * An initialization vector for the encryption algorithms. This is
- * used to "tweak" the encryption algorithms so that equivalent blocks of
- * data are encrypted into different ciphertext outputs, thus obfuscating
- * block patterns. Different modes of encryption have different requirements
- * for the IV. AES-GCM and AES-CCM require that an IV is never reused with the
- * same encryption key. This value is stored unencrypted and must simply be
- * provided to the decryption function. We use a 96 bit IV (as recommended by
- * NIST) for all block encryption. For non-dedup blocks we derive the IV
- * randomly. The first 64 bits of the IV are stored in the second word of DVA[2]
- * and the remaining 32 bits are stored in the upper 32 bits of blk_fill. For
- * most object types this is safe because we only encrypt level 0 blocks which
- * means that the fill count will be 1. For DMU_OT_DNODE blocks the fill count
- * is instead used to indicate the number of allocated dnodes beneath the bp.
- * The on-disk format supports at most 2^15 slots per L0 dnode block, because
- * the maximum block size is 16MB (2^24). In either case, for level 0 blocks
- * this number will still be smaller than UINT32_MAX so it is safe to store the
- * IV in the top 32 bits of blk_fill, while leaving the bottom 32 bits of the
- * fill count for the dnode code.
+ * An initialization vector for the encryption algorithms. This is used to
+ * "tweak" the encryption algorithms so that two blocks of the same data are
+ * encrypted into different ciphertext outputs, thus obfuscating block patterns.
+ * The supported encryption modes (AES-GCM and AES-CCM) require that an IV is
+ * never reused with the same encryption key. This value is stored unencrypted
+ * and must simply be provided to the decryption function. We use a 96 bit IV
+ * (as recommended by NIST) for all block encryption. For non-dedup blocks we
+ * derive the IV randomly. The first 64 bits of the IV are stored in the second
+ * word of DVA[2] and the remaining 32 bits are stored in the upper 32 bits of
+ * blk_fill. This is safe because encrypted blocks can't use the upper 32 bits
+ * of blk_fill. We only encrypt level 0 blocks, which normally have a fill count
+ * of 1. The only exception is for DMU_OT_DNODE objects, where the fill count of
+ * level 0 blocks is the number of allocated dnodes in that block. The on-disk
+ * format supports at most 2^15 slots per L0 dnode block, because the maximum
+ * block size is 16MB (2^24). In either case, for level 0 blocks this number
+ * will still be smaller than UINT32_MAX so it is safe to store the IV in the
+ * top 32 bits of blk_fill, while leaving the bottom 32 bits of the fill count
+ * for the dnode code.
  *
  * Master key:
  * This is the most important secret data of an encrypted dataset. It is used
@@ -65,7 +65,7 @@
  * do not use the master key to directly encrypt any data because there are
  * theoretical limits on how much data can actually be safely encrypted with
  * any encryption mode. The master key is stored encrypted on disk with the
- * user's wrapping key. It's length is determined by the encryption algorithm.
+ * user's wrapping key. Its length is determined by the encryption algorithm.
  * For details on how this is stored see the block comment in dsl_crypt.c
  *
  * Salt:
@@ -93,21 +93,21 @@
  * data from being altered, we authenticate this data using SHA512-HMAC. This
  * will produce a MAC (similar to the one produced via encryption) which can
  * be used to verify the object was not modified. HMACs do not require key
- * rotation or IVs, so we can keep all 3 copies of authenticated data.
+ * rotation or IVs, so we can keep up to the full 3 copies of authenticated
+ * data.
  *
  * ZIL ENCRYPTION:
  * ZIL blocks have their bp written to disk ahead of the associated data, so we
- * cannot store encryption paramaters there as we normally do. For these blocks
- * the MAC is stored in the embedded checksum within the zil_chain_t header. The
- * salt and IV are generated for the block on bp allocation instead of at
- * encryption time. In addition, ZIL blocks have some pieces that must be left
- * in plaintext for claiming while all of the sensitive user data still needs to
- * be encrypted. The function zio_crypt_init_uios_zil() handles parsing which
- * which pieces of the block need to be encrypted. All data that is not
- * encrypted is authenticated using the AAD mechanisms that the supported
- * encryption modes provide for. In order to preserve the semantics of the ZIL
- * for encrypted datasets, the ZIL is not protected at the objset level as
- * described below.
+ * cannot store the MAC there as we normally do. For these blocks the MAC is
+ * stored in the embedded checksum within the zil_chain_t header. The salt and
+ * IV are generated for the block on bp allocation instead of at encryption
+ * time. In addition, ZIL blocks have some pieces that must be left in plaintext
+ * for claiming even though all of the sensitive user data still needs to be
+ * encrypted. The function zio_crypt_init_uios_zil() handles parsing which
+ * pieces of the block need to be encrypted. All data that is not encrypted is
+ * authenticated using the AAD mechanisms that the supported encryption modes
+ * provide for. In order to preserve the semantics of the ZIL for encrypted
+ * datasets, the ZIL is not protected at the objset level as described below.
  *
  * DNODE ENCRYPTION:
  * Similarly to ZIL blocks, the core part of each dnode_phys_t needs to be left
@@ -119,16 +119,16 @@
  * OBJECT SET AUTHENTICATION:
  * Up to this point, everything we have encrypted and authenticated has been
  * at level 0 (or -2 for the ZIL). If we did not do any further work the
- * on-disk format would be suscptible to attacks that deleted or rearrannged
+ * on-disk format would be susceptible to attacks that deleted or rearrannged
  * the order of level 0 blocks. Ideally, the cleanest solution would be to
  * maintain a tree of authentication MACs going up the bp tree. However, this
  * presents a problem for raw sends. Send files do not send information about
  * indirect blocks so there would be no convenient way to transfer the MACs and
  * they cannot be recalculated on the receive side without the master key which
- * would defeat the purpose of raw sends in the first place. Instead, for the
- * indirect levels of the bp tree, we use a regular SHA512 of the MACs from
- * the level below. We also include some portable fields from blk_prop such as
- * the lsize and compression algorithm to prevent the data from being
+ * would defeat one of the purposes of raw sends in the first place. Instead,
+ * for the indirect levels of the bp tree, we use a regular SHA512 of the MACs
+ * from the level below. We also include some portable fields from blk_prop such
+ * as the lsize and compression algorithm to prevent the data from being
  * misinterpretted.
  *
  * At the objset level, we maintain 2 seperate 256 bit MACs in the
@@ -147,15 +147,17 @@
  * ciphertext. Normally, one should never reuse an IV with the same encryption
  * key or else AES-GCM and AES-CCM can both actually leak the plaintext of both
  * blocks. In this case, however, since we are using the same plaindata as
- * well all that we end up with is a duplicate of the original data we already
- * had. As a result, an attacker with read access to the raw disk will be able
- * to tell which blocks are the same but this information is already given away
+ * well all that we end up with is a duplicate of the original ciphertext we
+ * already had. As a result, an attacker with read access to the raw disk will
+ * be able to tell which blocks are the same but this information is given away
  * by dedup anyway. In order to get the same IVs and encryption keys for
  * equivalent blocks of data we use an HMAC of the plaindata. We use an HMAC
- * here a reproducible checksum of the plaindata is never available to the
- * attacker. The HMAC key is kept alongside the master key, encrypted on disk.
- * The first 64 bits of the HMAC are used in place of the random salt, and the
- * next 96 bits are used as the IV.
+ * here so that a reproducible checksum of the plaindata is never available to
+ * the attacker. The HMAC key is kept alongside the master key, encrypted on
+ * disk. The first 64 bits of the HMAC are used in place of the random salt, and
+ * the next 96 bits are used as the IV. As a result of this mechanism, dedup
+ * will only work within a clone family since encrypted dedup requires use of
+ * the same master and HMAC keys.
  */
 
 /*
@@ -169,18 +171,21 @@
  * generated n IVs with a cryptographically secure RNG, the approximate
  * probability p(n) of a collision is given as:
  *
- * p(n) ~= e^(-n(n-1)/(2*(2^96)))
+ * p(n) ~= e^(-n*(n-1)/(2*(2^96)))
  *
  * [http://www.math.cornell.edu/~mec/2008-2009/TianyiZheng/Birthday.html]
  *
  * Assuming that we want to ensure that p(n) never goes over 1 / 1 trillion
- * we must not write more than 398065730 blocks with the same encryption key,
- * which is significantly less than the zettabyte of data that ZFS claims to
- * be able to store. To counteract this, we rotate our keys after 400000000
- * blocks have been written by generating a new random 64 bit salt for our
- * HKDF encryption key generation function.
+ * we must not write more than 398,065,730 blocks with the same encryption key.
+ * Therefore, we rotate our keys after 400,000,000 blocks have been written by
+ * generating a new random 64 bit salt for our HKDF encryption key generation
+ * function.
  */
-unsigned long zfs_key_max_salt_uses = 400000000;
+#define	ZFS_KEY_MAX_SALT_USES_DEFAULT	400000000
+#define	ZFS_KEY_MAX_SALT_USES_MAX	800000000
+#define	ZFS_CURRENT_MAX_SALT_USES	\
+	(MIN(zfs_key_max_salt_uses, ZFS_KEY_MAX_SALT_USES_MAX))
+unsigned long zfs_key_max_salt_uses = ZFS_KEY_MAX_SALT_USES_DEFAULT;
 
 zio_crypt_info_t zio_crypt_table[ZIO_CRYPT_FUNCTIONS] = {
 	{"",			ZC_TYPE_NONE,	0,	"inherit"},
@@ -465,7 +470,7 @@ zio_crypt_key_change_salt(zio_crypt_key_t *key)
 	rw_enter(&key->zk_salt_lock, RW_WRITER);
 
 	/* someone beat us to the salt rotation, just unlock and return */
-	if (key->zk_salt_count < zfs_key_max_salt_uses)
+	if (key->zk_salt_count < ZFS_CURRENT_MAX_SALT_USES)
 		goto out_unlock;
 
 	/* derive the current key from the master key and the new salt */
@@ -506,7 +511,7 @@ zio_crypt_key_get_salt(zio_crypt_key_t *key, uint8_t *salt)
 
 	bcopy(key->zk_salt, salt, ZIO_DATA_SALT_LEN);
 	salt_change = (atomic_inc_64_nv(&key->zk_salt_count) >=
-	    zfs_key_max_salt_uses);
+	    ZFS_CURRENT_MAX_SALT_USES);
 
 	rw_exit(&key->zk_salt_lock);
 
@@ -556,7 +561,11 @@ zio_do_crypt_uio(boolean_t encrypt, uint64_t crypt, crypto_key_t *key,
 	/* setup encryption mechanism (same as crypt) */
 	mech.cm_type = crypto_mech2id(crypt_info.ci_mechname);
 
-	/* plain length will include the MAC if we are decrypting */
+	/*
+	 * Strangely, the ICP requires that plain_full_len must include
+	 * the MAC length when decrypting, even though the UIO does not
+	 * need to have the extra space allocated.
+	 */
 	if (encrypt) {
 		plain_full_len = datalen;
 	} else {
@@ -851,6 +860,14 @@ zio_crypt_generate_iv_salt_dedup(zio_crypt_key_t *key, uint8_t *data,
 	return (0);
 }
 
+/*
+ * The following functions are used to encode and decode encryption parameters
+ * into blkptr_t and zil_header_t. The ICP wants to use these parameters as
+ * byte strings, which normally means that these strings would not need to deal
+ * with byteswapping at all. However, both blkptr_t and zil_header_t may be
+ * byteswapped by lower layers and so we must "undo" that byteswap here upon
+ * decoding.
+ */
 void
 zio_crypt_encode_params_bp(blkptr_t *bp, uint8_t *salt, uint8_t *iv)
 {
@@ -990,19 +1007,132 @@ zio_crypt_copy_dnode_bonus(abd_t *src_abd, uint8_t *dst, uint_t datalen)
 	abd_return_buf(src_abd, src, datalen);
 }
 
+static void
+zio_crypt_bp_zero_nonportable_blkprop(blkptr_t *bp)
+{
+	BP_SET_DEDUP(bp, 0);
+	BP_SET_CHECKSUM(bp, 0);
+
+	/*
+	 * psize cannot be set to zero or it will trigger asserts, but the
+	 * value doesn't really matter as long as it is constant.
+	 */
+	BP_SET_PSIZE(bp, SPA_MINBLOCKSIZE);
+}
+
+
 static int
-zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, boolean_t byteswap,
+zio_crypt_bp_do_hmac_updates(crypto_context_t ctx, boolean_t should_bswap,
+    blkptr_t *bp)
+{
+	int ret;
+	crypto_data_t cd;
+	uint64_t le_blkprop;
+	blkptr_t tmpbp = *bp;
+	uint8_t mac[ZIO_DATA_MAC_LEN];
+
+	cd.cd_format = CRYPTO_DATA_RAW;
+	cd.cd_offset = 0;
+
+	if (should_bswap)
+		byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
+
+	ASSERT(BP_USES_CRYPT(&tmpbp) || BP_IS_HOLE(&tmpbp));
+	ASSERT0(BP_IS_EMBEDDED(&tmpbp));
+	zio_crypt_bp_zero_nonportable_blkprop(&tmpbp);
+
+	le_blkprop = (ZFS_HOST_BYTEORDER) ?
+	    tmpbp.blk_prop : BSWAP_64(tmpbp.blk_prop);
+
+	cd.cd_length = sizeof (uint64_t);
+	cd.cd_raw.iov_base = (char *)&le_blkprop;
+	cd.cd_raw.iov_len = cd.cd_length;
+
+	ret = crypto_mac_update(ctx, &cd, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	zio_crypt_decode_mac_bp(&tmpbp, mac);
+	cd.cd_length = ZIO_DATA_MAC_LEN;
+	cd.cd_raw.iov_base = (char *)mac;
+	cd.cd_raw.iov_len = cd.cd_length;
+
+	ret = crypto_mac_update(ctx, &cd, NULL);
+	if (ret != CRYPTO_SUCCESS) {
+		ret = SET_ERROR(EIO);
+		goto error;
+	}
+
+	return (0);
+
+error:
+	return (ret);
+}
+
+static void
+zio_crypt_bp_do_indrect_checksum_updates(SHA2_CTX *ctx, boolean_t should_bswap,
+    blkptr_t *bp)
+{
+	blkptr_t tmpbp = *bp;
+	uint8_t mac[ZIO_DATA_MAC_LEN];
+
+	if (should_bswap)
+		byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
+
+	ASSERT(BP_USES_CRYPT(&tmpbp) || BP_IS_HOLE(&tmpbp));
+	ASSERT0(BP_IS_EMBEDDED(&tmpbp));
+	zio_crypt_bp_zero_nonportable_blkprop(&tmpbp);
+	zio_crypt_decode_mac_bp(&tmpbp, mac);
+
+	if (should_bswap)
+		byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
+
+	SHA2Update(ctx, &tmpbp.blk_prop, sizeof (uint64_t));
+	SHA2Update(ctx, mac, ZIO_DATA_MAC_LEN);
+}
+
+static void
+zio_crypt_bp_do_aad_updates(uint8_t **aadp, uint_t *aad_len,
+    boolean_t should_bswap, blkptr_t *bp)
+{
+	uint_t crypt_len;
+	blkptr_t tmpbp = *bp;
+	uint8_t mac[ZIO_DATA_MAC_LEN];
+
+	if (should_bswap)
+		byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
+
+	ASSERT(BP_USES_CRYPT(&tmpbp) || BP_IS_HOLE(&tmpbp));
+	ASSERT0(BP_IS_EMBEDDED(&tmpbp));
+	zio_crypt_bp_zero_nonportable_blkprop(&tmpbp);
+	zio_crypt_decode_mac_bp(&tmpbp, mac);
+
+	if (should_bswap)
+		byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
+
+	crypt_len = sizeof (uint64_t);
+	bcopy(&tmpbp.blk_prop, *aadp, crypt_len);
+	*aadp += crypt_len;
+	*aad_len += crypt_len;
+
+	crypt_len = ZIO_DATA_MAC_LEN;
+	bcopy(mac, *aadp, crypt_len);
+	*aadp += crypt_len;
+	*aad_len += crypt_len;
+}
+
+static int
+zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, boolean_t should_bswap,
     dnode_phys_t *dnp)
 {
 	int ret, i;
 	dnode_phys_t *adnp;
-	blkptr_t *curr_bp, *bp;
-	blkptr_t tmpbp;
-	boolean_t need_bswap = (byteswap ^ !ZFS_HOST_BYTEORDER);
-	uint64_t blkprop;
+	blkptr_t *bp;
+	boolean_t le_bswap = (should_bswap == ZFS_HOST_BYTEORDER);
 	crypto_data_t cd;
 	uint8_t tmp_dncore[offsetof(dnode_phys_t, dn_blkptr)];
-	uint8_t mac[ZIO_DATA_MAC_LEN];
 
 	cd.cd_format = CRYPTO_DATA_RAW;
 	cd.cd_offset = 0;
@@ -1010,7 +1140,7 @@ zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, boolean_t byteswap,
 	/* authenticate the core dnode (masking out non-portable bits) */
 	bcopy(dnp, tmp_dncore, sizeof (tmp_dncore));
 	adnp = (dnode_phys_t *)tmp_dncore;
-	if (need_bswap) {
+	if (le_bswap) {
 		adnp->dn_datablkszsec = BSWAP_16(adnp->dn_datablkszsec);
 		adnp->dn_bonuslen = BSWAP_16(adnp->dn_bonuslen);
 		adnp->dn_maxblkid = BSWAP_64(adnp->dn_maxblkid);
@@ -1031,48 +1161,16 @@ zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, boolean_t byteswap,
 
 	for (i = 0; i < dnp->dn_nblkptr + 1; i++) {
 		if (i < dnp->dn_nblkptr) {
-			curr_bp = &dnp->dn_blkptr[i];
+			bp = &dnp->dn_blkptr[i];
 		} else if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
-			curr_bp = DN_SPILL_BLKPTR(dnp);
+			bp = DN_SPILL_BLKPTR(dnp);
 		} else {
 			break;
 		}
 
-		if (byteswap) {
-			tmpbp = *curr_bp;
-			byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
-			bp = &tmpbp;
-		} else {
-			bp = curr_bp;
-		}
-
-		blkprop = bp->blk_prop;
-		BF64_SET(blkprop, 62, 1, 0);
-		BF64_SET(blkprop, 40, 8, 0);
-		BF64_SET(blkprop, 16, 16, 0);
-		if (byteswap ^ need_bswap)
-			blkprop = BSWAP_64(blkprop);
-
-		cd.cd_length = sizeof (uint64_t);
-		cd.cd_raw.iov_base = (char *)&blkprop;
-		cd.cd_raw.iov_len = cd.cd_length;
-
-		ret = crypto_mac_update(ctx, &cd, NULL);
-		if (ret != CRYPTO_SUCCESS) {
-			ret = SET_ERROR(EIO);
+		ret = zio_crypt_bp_do_hmac_updates(ctx, should_bswap, bp);
+		if (ret != 0)
 			goto error;
-		}
-
-		zio_crypt_decode_mac_bp(bp, mac);
-		cd.cd_length = ZIO_DATA_MAC_LEN;
-		cd.cd_raw.iov_base = (char *)mac;
-		cd.cd_raw.iov_len = cd.cd_length;
-
-		ret = crypto_mac_update(ctx, &cd, NULL);
-		if (ret != CRYPTO_SUCCESS) {
-			ret = SET_ERROR(EIO);
-			goto error;
-		}
 	}
 
 	return (0);
@@ -1100,11 +1198,14 @@ error:
  * endianness which will modify fields protected by the MAC. As a result, MAC
  * calculation for objset blocks works slightly differently from other block
  * types. Where other block types MAC the data in whatever endianness is
- * written to disk, objset blocks always work on little endian values.
+ * written to disk, objset blocks always MAC little endian version of their
+ * values. In the code, should_bswap is the value from BP_SHOULD_BYTESWAP()
+ * and le_bswap indicates whether a byteswap is needed to get this block
+ * into little endian format.
  */
 int
 zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
-    boolean_t byteswap, uint8_t *portable_mac, uint8_t *local_mac)
+    boolean_t should_bswap, uint8_t *portable_mac, uint8_t *local_mac)
 {
 	int ret;
 	crypto_mechanism_t mech;
@@ -1112,7 +1213,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	crypto_data_t cd;
 	objset_phys_t *osp = data;
 	uint64_t intval;
-	boolean_t need_bswap = (byteswap ^ !ZFS_HOST_BYTEORDER);
+	boolean_t le_bswap = (should_bswap == ZFS_HOST_BYTEORDER);
 	uint8_t raw_portable_mac[SHA512_DIGEST_LEN];
 	uint8_t raw_local_mac[SHA512_DIGEST_LEN];
 
@@ -1132,7 +1233,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	}
 
 	/* add in the os_type */
-	intval = (need_bswap) ? osp->os_type : BSWAP_64(osp->os_type);
+	intval = (le_bswap) ? osp->os_type : BSWAP_64(osp->os_type);
 	cd.cd_length = sizeof (uint64_t);
 	cd.cd_raw.iov_base = (char *)&intval;
 	cd.cd_raw.iov_len = cd.cd_length;
@@ -1145,10 +1246,10 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 
 	/* add in the portable os_flags */
 	intval = osp->os_flags;
-	if (byteswap)
+	if (should_bswap)
 		intval = BSWAP_64(intval);
 	intval &= OBJSET_CRYPT_PORTABLE_FLAGS_MASK;
-	if (byteswap ^ need_bswap)
+	if (!ZFS_HOST_BYTEORDER)
 		intval = BSWAP_64(intval);
 
 	cd.cd_length = sizeof (uint64_t);
@@ -1162,7 +1263,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	}
 
 	/* add in fields from the metadnode */
-	ret = zio_crypt_do_dnode_hmac_updates(ctx, byteswap,
+	ret = zio_crypt_do_dnode_hmac_updates(ctx, should_bswap,
 	    &osp->os_meta_dnode);
 	if (ret)
 		goto error;
@@ -1199,10 +1300,10 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 
 	/* add in the non-portable os_flags */
 	intval = osp->os_flags;
-	if (byteswap)
+	if (should_bswap)
 		intval = BSWAP_64(intval);
 	intval &= ~OBJSET_CRYPT_PORTABLE_FLAGS_MASK;
-	if (byteswap ^ need_bswap)
+	if (!ZFS_HOST_BYTEORDER)
 		intval = BSWAP_64(intval);
 
 	cd.cd_length = sizeof (uint64_t);
@@ -1216,12 +1317,12 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	}
 
 	/* add in fields from the user accounting dnodes */
-	ret = zio_crypt_do_dnode_hmac_updates(ctx, byteswap,
+	ret = zio_crypt_do_dnode_hmac_updates(ctx, should_bswap,
 	    &osp->os_userused_dnode);
 	if (ret)
 		goto error;
 
-	ret = zio_crypt_do_dnode_hmac_updates(ctx, byteswap,
+	ret = zio_crypt_do_dnode_hmac_updates(ctx, should_bswap,
 	    &osp->os_groupused_dnode);
 	if (ret)
 		goto error;
@@ -1254,47 +1355,26 @@ zio_crypt_destroy_uio(uio_t *uio)
 		kmem_free(uio->uio_iov, uio->uio_iovcnt * sizeof (iovec_t));
 }
 
+/*
+ * This function parses an uncompressed indirect block and returns a checksum
+ * of all the portable fields from all of the contained bps. The portable
+ * fields are the MAC and all of the fields from blk_prop except for the dedup,
+ * checksum, and psize bits. For an explanation of the purpose of this, see
+ * the comment block on object set authentication.
+ */
 int
 zio_crypt_do_indirect_mac_checksum(boolean_t generate, void *buf,
     uint_t datalen, boolean_t byteswap, uint8_t *cksum)
 {
-	blkptr_t *bp, *curr_bp;
+	blkptr_t *bp;
 	int i, epb = datalen >> SPA_BLKPTRSHIFT;
-	uint64_t blkprop;
 	SHA2_CTX ctx;
-	blkptr_t tmpbp;
 	uint8_t digestbuf[SHA512_DIGEST_LEN];
-	uint8_t mac[ZIO_DATA_MAC_LEN];
 
 	/* checksum all of the MACs from the layer below */
 	SHA2Init(SHA512, &ctx);
-	for (i = 0, curr_bp = buf; i < epb; i++, curr_bp++) {
-		if (byteswap) {
-			tmpbp = *curr_bp;
-			byteswap_uint64_array(&tmpbp, sizeof (blkptr_t));
-			bp = &tmpbp;
-		} else {
-			bp = curr_bp;
-		}
-
-		ASSERT(BP_USES_CRYPT(bp) || BP_IS_HOLE(bp));
-		ASSERT0(BP_IS_EMBEDDED(bp));
-
-		/*
-		 * The top level objset MAC protects all the checksums of all
-		 * MACs below. It also protects everything in blk_prop except
-		 * for the checksum, dedup, and psize bits.
-		 */
-		blkprop = bp->blk_prop;
-		BF64_SET(blkprop, 62, 1, 0);
-		BF64_SET(blkprop, 40, 8, 0);
-		BF64_SET(blkprop, 16, 16, 0);
-		if (byteswap)
-			blkprop = BSWAP_64(blkprop);
-		SHA2Update(&ctx, &blkprop, sizeof (uint64_t));
-
-		zio_crypt_decode_mac_bp(bp, mac);
-		SHA2Update(&ctx, mac, ZIO_DATA_MAC_LEN);
+	for (i = 0, bp = buf; i < epb; i++, bp++) {
+		zio_crypt_bp_do_indrect_checksum_updates(&ctx, byteswap, bp);
 	}
 	SHA2Final(digestbuf, &ctx);
 
@@ -1530,9 +1610,7 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
     boolean_t *no_crypt)
 {
 	int ret;
-	blkptr_t *curr_bp, *bp;
-	blkptr_t tmpbp;
-	uint64_t blkprop;
+	blkptr_t *bp;
 	uint_t nr_src, nr_dst, crypt_len;
 	uint_t aad_len = 0, nr_iovecs = 0, total_len = 0;
 	uint_t i, j, max_dnp = datalen >> DNODE_SHIFT;
@@ -1540,7 +1618,6 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 	uint8_t *src, *dst, *aadp;
 	dnode_phys_t *dnp, *adnp, *sdnp, *ddnp;
 	uint8_t *aadbuf = zio_buf_alloc(datalen);
-	uint8_t mac[ZIO_DATA_MAC_LEN];
 
 	if (encrypt) {
 		src = plainbuf;
@@ -1633,39 +1710,15 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 
 		for (j = 0; j < dnp->dn_nblkptr + 1; j++) {
 			if (j < dnp->dn_nblkptr) {
-				curr_bp = &dnp->dn_blkptr[j];
+				bp = &dnp->dn_blkptr[j];
 			} else if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
-				curr_bp = DN_SPILL_BLKPTR(dnp);
+				bp = DN_SPILL_BLKPTR(dnp);
 			} else {
 				break;
 			}
 
-			if (byteswap) {
-				tmpbp = *curr_bp;
-				byteswap_uint64_array(&tmpbp,
-				    sizeof (blkptr_t));
-				bp = &tmpbp;
-			} else {
-				bp = curr_bp;
-			}
-
-			blkprop = bp->blk_prop;
-			BF64_SET(blkprop, 62, 1, 0);
-			BF64_SET(blkprop, 40, 8, 0);
-			BF64_SET(blkprop, 16, 16, 0);
-			if (byteswap)
-				blkprop = BSWAP_64(blkprop);
-
-			crypt_len = sizeof (uint64_t);
-			bcopy(&blkprop, aadp, crypt_len);
-			aadp += crypt_len;
-			aad_len += crypt_len;
-
-			zio_crypt_decode_mac_bp(bp, mac);
-			crypt_len = ZIO_DATA_MAC_LEN;
-			bcopy(mac, aadp, crypt_len);
-			aadp += crypt_len;
-			aad_len += crypt_len;
+			zio_crypt_bp_do_aad_updates(&aadp, &aad_len,
+			    byteswap, bp);
 		}
 
 		/*

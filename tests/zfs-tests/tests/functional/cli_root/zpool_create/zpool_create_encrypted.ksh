@@ -19,7 +19,6 @@
 #
 
 . $STF_SUITE/include/libtest.shlib
-#. $STF_SUITE/tests/functional/cli_root/zfs_create/zfs_create_common.kshlib
 . $STF_SUITE/tests/functional/cli_root/zfs_load-key/zfs_load-key_common.kshlib
 
 #
@@ -67,22 +66,29 @@ log_assert "'zpool create' should create an encrypted dataset only if it" \
 
 log_mustnot zpool create -O keylocation=prompt $TESTPOOL $DISKS
 log_mustnot zpool create -O keyformat=passphrase $TESTPOOL $DISKS
-log_mustnot zpool create -O keyformat=passphrase -O keylocation=prompt $TESTPOOL $DISKS
+log_mustnot zpool create -O keyformat=passphrase -O keylocation=prompt \
+	$TESTPOOL $DISKS
 
 log_must zpool create -O encryption=off $TESTPOOL $DISKS
 log_must zpool destroy $TESTPOOL
 
-log_mustnot zpool create -O encryption=off -O keylocation=prompt $TESTPOOL $DISKS
-log_mustnot zpool create -O encryption=off -O keyformat=passphrase $TESTPOOL $DISKS
-log_mustnot zpool create -O encryption=off -O keyformat=passphrase -O keylocation=prompt $TESTPOOL $DISKS
+log_mustnot zpool create -O encryption=off -O keylocation=prompt \
+	$TESTPOOL $DISKS
+log_mustnot zpool create -O encryption=off -O keyformat=passphrase \
+	$TESTPOOL $DISKS
+log_mustnot zpool create -O encryption=off -O keyformat=passphrase \
+	-O keylocation=prompt $TESTPOOL $DISKS
 
 log_mustnot zpool create -O encryption=on $TESTPOOL $DISKS
-log_mustnot zpool create -O encryption=on -O keylocation=prompt $TESTPOOL $DISKS
+log_mustnot zpool create -O encryption=on -O keylocation=prompt \
+	$TESTPOOL $DISKS
 
-log_must eval "echo $PASSPHRASE | zpool create -O encryption=on -O keyformat=passphrase $TESTPOOL $DISKS"
+log_must eval "echo $PASSPHRASE | zpool create -O encryption=on" \
+	"-O keyformat=passphrase $TESTPOOL $DISKS"
 log_must zpool destroy $TESTPOOL
 
-log_must eval "echo $PASSPHRASE | zpool create -O encryption=on -O keyformat=passphrase -O keylocation=prompt $TESTPOOL $DISKS"
+log_must eval "echo $PASSPHRASE | zpool create -O encryption=on" \
+	"-O keyformat=passphrase -O keylocation=prompt $TESTPOOL $DISKS"
 log_must zpool destroy $TESTPOOL
 
 log_pass "'zpool create' creates an encrypted dataset only if it has a" \

@@ -27,12 +27,14 @@
 # encryption root.
 #
 # STRATEGY:
-# 1. Create two encryption roots and a child and grandchild of the first
-#    dataset
+# 1. Create two encryption roots, and a child and grandchild of the first
+#    encryption root
 # 2. Attempt to rename the grandchild under an unencrypted parent
 # 3. Attempt to rename the grandchild under a different encrypted parent
 # 4. Attempt to rename the grandchild under the current parent
-# 5. Attempt to rename the grandchild to a child
+# 5. Verify the encryption root of the dataset
+# 6. Attempt to rename the grandchild to a child
+# 7. Verify the encryption root of the dataset
 #
 
 verify_runnable "both"
@@ -58,12 +60,19 @@ log_must eval "echo $PASSPHRASE1 | zfs create -o encryption=on" \
 
 log_mustnot zfs rename $TESTPOOL/$TESTFS2/child/grandchild \
 	$TESTPOOL/grandchild
+
 log_mustnot zfs rename $TESTPOOL/$TESTFS2/child/grandchild \
 	$TESTPOOL/$TESTFS3/grandchild
+
 log_must zfs rename $TESTPOOL/$TESTFS2/child/grandchild \
 	$TESTPOOL/$TESTFS2/child/grandchild2
+log_must verify_encryption_root $TESTPOOL/$TESTFS2/child/grandchild2 \
+	$TESTPOOL/$TESTFS2
+
 log_must zfs rename $TESTPOOL/$TESTFS2/child/grandchild2 \
 	$TESTPOOL/$TESTFS2/grandchild2
+log_must verify_encryption_root $TESTPOOL/$TESTFS2/grandchild2 \
+	$TESTPOOL/$TESTFS2
 
 log_pass "'zfs rename' does not move an encrypted child outside of its" \
 	"encryption root"

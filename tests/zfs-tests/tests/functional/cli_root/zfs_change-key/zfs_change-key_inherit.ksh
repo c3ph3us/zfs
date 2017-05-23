@@ -39,20 +39,6 @@
 
 verify_runnable "both"
 
-function verify_encryption_root
-{
-	typeset ds=$1
-	typeset val=$2
-	typeset eroot=$(zfs get -H -o value encryptionroot $ds)
-
-	if [[ "$eroot" != "$val" ]]; then
-		log_note "Expected encryption root '$val', got '$eroot'"
-		return 1
-	fi
-
-	return 0
-}
-
 function cleanup
 {
 	datasetexists $TESTPOOL/$TESTFS1 && \

@@ -2634,14 +2634,18 @@ recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, const char *destname,
 	while ((fselem = nvlist_next_nvpair(stream_fss, fselem)) != NULL) {
 		zfs_handle_t *zhp = NULL;
 		uint64_t crypt;
-		nvlist_t *snaps, *stream_nvfs = NULL;
+		nvlist_t *snaps, *props, *stream_nvfs = NULL;
 		nvpair_t *snapel = NULL;
 		boolean_t is_encroot, is_clone, stream_encroot;
 		char *cp;
+		char *stream_keylocation = NULL;
+		char keylocation[MAXNAMELEN];
 		char fsname[ZFS_MAX_DATASET_NAME_LEN];
 
+		keylocation[0] = '\0';
 		VERIFY(0 == nvpair_value_nvlist(fselem, &stream_nvfs));
 		VERIFY(0 == nvlist_lookup_nvlist(stream_nvfs, "snaps", &snaps));
+		VERIFY(0 == nvlist_lookup_nvlist(stream_nvfs, "props", &props));
 		stream_encroot = nvlist_exists(stream_nvfs, "is_encroot");
 
 		/* find a snapshot from the stream that exists locally */
@@ -2672,22 +2676,54 @@ recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, const char *destname,
 		crypt = zfs_prop_get_int(zhp, ZFS_PROP_ENCRYPTION);
 		is_clone = zhp->zfs_dmustats.dds_origin[0] != '\0';
 		(void) zfs_crypto_get_encryption_root(zhp, &is_encroot, NULL);
-		zfs_close(zhp);
 
 		/* we don't need to do anything for unencrypted filesystems */
-		if (crypt == ZIO_CRYPT_OFF)
+		if (crypt == ZIO_CRYPT_OFF) {
+			zfs_close(zhp);
 			continue;
+		}
 
 		/*
-		 * If the dataset is flagged as an encryption root,
-		 * was not received as a clone and is not currently
-		 * an encryption root, force it to become one.
+		 * If the dataset is flagged as an encryption root, was not
+		 * received as a clone and is not currently an encryption root,
+		 * force it to become one. Fixup the keylocation if necessary.
 		 */
-		if (stream_encroot && !is_clone && !is_encroot) {
-			err = lzc_change_key(fsname, DCP_CMD_FORCE_NEW_KEY,
-			    NULL, NULL, 0);
-			if (err != 0)
+		if (stream_encroot) {
+			if (!is_clone && !is_encroot) {
+				err = lzc_change_key(fsname,
+				    DCP_CMD_FORCE_NEW_KEY, NULL, NULL, 0);
+				if (err != 0) {
+					zfs_close(zhp);
+					goto error;
+				}
+			}
+
+			VERIFY(0 == nvlist_lookup_string(props,
+			    zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
+			    &stream_keylocation));
+
+			/*
+			 * Refresh the properties in case the call to
+			 * lzc_change_key() changed the value.
+			 */
+			zfs_refresh_properties(zhp);
+			err = zfs_prop_get(zhp, ZFS_PROP_KEYLOCATION,
+			    keylocation, sizeof (keylocation), NULL, NULL,
+			    0, B_TRUE);
+			if (err != 0) {
+				zfs_close(zhp);
 				goto error;
+			}
+
+			if (strcmp(keylocation, stream_keylocation) != 0) {
+				err = zfs_prop_set(zhp,
+				    zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
+				    stream_keylocation);
+				if (err != 0) {
+					zfs_close(zhp);
+					goto error;
+				}
+			}
 		}
 
 		/*
@@ -2698,9 +2734,13 @@ recv_fix_encryption_heirarchy(libzfs_handle_t *hdl, const char *destname,
 		if (!stream_encroot && is_encroot) {
 			err = lzc_change_key(fsname, DCP_CMD_FORCE_INHERIT,
 			    NULL, NULL, 0);
-			if (err != 0)
+			if (err != 0) {
+				zfs_close(zhp);
 				goto error;
+			}
 		}
+
+		zfs_close(zhp);
 	}
 
 	return (0);
@@ -3520,6 +3560,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	char destsnap[MAXPATHLEN * 2];
 	char origin[MAXNAMELEN];
 	char name[MAXPATHLEN];
+	char tmp_keylocation[MAXNAMELEN];
 	nvlist_t *rcvprops = NULL; /* props received from the send stream */
 	nvlist_t *oxprops = NULL; /* override (-o) and exclude (-x) props */
 	nvlist_t *origprops = NULL; /* original props (if destination exists) */
@@ -3529,6 +3570,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 
 	begin_time = time(NULL);
 	bzero(origin, MAXNAMELEN);
+	bzero(tmp_keylocation, MAXNAMELEN);
 
 	(void) snprintf(errbuf, sizeof (errbuf), dgettext(TEXT_DOMAIN,
 	    "cannot receive"));
@@ -3537,6 +3579,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	    ENOENT);
 
 	if (stream_avl != NULL) {
+		char *keylocation = NULL;
 		nvlist_t *lookup = NULL;
 		nvlist_t *fs = fsavl_find(stream_avl, drrb->drr_toguid,
 		    &snapname);
@@ -3547,6 +3590,22 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		if (err) {
 			VERIFY(0 == nvlist_alloc(&rcvprops, NV_UNIQUE_NAME, 0));
 			newprops = B_TRUE;
+		}
+
+		/*
+		 * The keylocation property may only be set on encryption roots,
+		 * but this dataset might not become an encryption root until
+		 * recv_fix_encryption_heirarchy() is called. That function
+		 * will fixup the keylocation anyway, so we temporarily unset
+		 * the keylocation for now to avoid any errors from the receive
+		 * ioctl.
+		 */
+		err = nvlist_lookup_string(rcvprops,
+		    zfs_prop_to_name(ZFS_PROP_KEYLOCATION), &keylocation);
+		if (err == 0) {
+			strcpy(tmp_keylocation, keylocation);
+			(void) nvlist_remove_all(rcvprops,
+			    zfs_prop_to_name(ZFS_PROP_KEYLOCATION));
 		}
 
 		if (flags->canmountoff) {
@@ -4138,6 +4197,11 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 out:
 	if (prop_errors != NULL)
 		nvlist_free(prop_errors);
+
+	if (tmp_keylocation[0] != '\0') {
+		VERIFY(0 == nvlist_add_string(rcvprops,
+		    zfs_prop_to_name(ZFS_PROP_KEYLOCATION), tmp_keylocation));
+	}
 
 	if (newprops)
 		nvlist_free(rcvprops);

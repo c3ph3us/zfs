@@ -2654,6 +2654,8 @@ dsl_dataset_promote_sync(void *arg, dmu_tx_t *tx)
 	VERIFY0(dsl_dir_hold_obj(dp, origin_ds->ds_dir->dd_object,
 	    NULL, FTAG, &odd));
 
+	dsl_dataset_promote_crypt_sync(hds->ds_dir, odd, tx);
+
 	/* change origin's next snap */
 	dmu_buf_will_dirty(origin_ds->ds_dbuf, tx);
 	oldnext_obj = dsl_dataset_phys(origin_ds)->ds_next_snap_obj;
