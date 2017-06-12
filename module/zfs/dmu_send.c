@@ -580,10 +580,12 @@ dump_object_range(dmu_sendarg_t *dsp, const blkptr_t *bp, uint64_t firstobj,
 	struct drr_object_range *drror =
 	    &(dsp->dsa_drr->drr_u.drr_object_range);
 
-	/* we only use this for raw sends */
+	/* we only use this record type for raw sends */
 	ASSERT(BP_IS_PROTECTED(bp));
 	ASSERT(dsp->dsa_featureflags & DMU_BACKUP_FEATURE_RAW);
 	ASSERT3U(BP_GET_COMPRESS(bp), ==, ZIO_COMPRESS_OFF);
+	ASSERT3U(BP_GET_TYPE(bp), ==, DMU_OT_DNODE);
+	ASSERT0(BP_GET_LEVEL(bp));
 
 	if (dsp->dsa_pending_op != PENDING_NONE) {
 		if (dump_record(dsp, NULL, 0) != 0)
@@ -829,6 +831,14 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 		 */
 		boolean_t split_large_blocks = blksz > SPA_OLD_MAXBLOCKSIZE &&
 		    !(dsa->dsa_featureflags & DMU_BACKUP_FEATURE_LARGE_BLOCKS);
+
+		/*
+		 * Raw sends require that we always get raw data as it exists
+		 * on disk, so we assert that we are not splitting blocks here.
+		 */
+		boolean_t request_raw =
+		    (dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) != 0;
+
 		/*
 		 * We should only request compressed data from the ARC if all
 		 * the following are true:
@@ -844,15 +854,6 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 		    !split_large_blocks && !BP_SHOULD_BYTESWAP(bp) &&
 		    !BP_IS_EMBEDDED(bp) && !DMU_OT_IS_METADATA(BP_GET_TYPE(bp));
 
-		/*
-		 * Raw sends only apply to protected blocks. Raw sends are
-		 * mutually exclusive with splitting large blocks and
-		 * compressed sends, so we assert that here.
-		 */
-		boolean_t request_raw =
-		    (dsa->dsa_featureflags & DMU_BACKUP_FEATURE_RAW) != 0;
-
-		IMPLY(request_raw, !request_compressed);
 		IMPLY(request_raw, !split_large_blocks);
 		IMPLY(request_raw, BP_IS_PROTECTED(bp));
 		ASSERT0(zb->zb_level);
@@ -863,10 +864,10 @@ do_dump(dmu_sendarg_t *dsa, struct send_block_record *data)
 		ASSERT3U(blksz, ==, BP_GET_LSIZE(bp));
 
 		enum zio_flag zioflags = ZIO_FLAG_CANFAIL;
-		if (request_compressed)
-			zioflags |= ZIO_FLAG_RAW_COMPRESS;
-		else if (request_raw)
+		if (request_raw)
 			zioflags |= ZIO_FLAG_RAW;
+		else if (request_compressed)
+			zioflags |= ZIO_FLAG_RAW_COMPRESS;
 
 		if (arc_read(NULL, spa, bp, arc_getbuf_func, &abuf,
 		    ZIO_PRIORITY_ASYNC_READ, zioflags, &aflags, zb) != 0) {
@@ -944,8 +945,6 @@ dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *to_ds,
 	size_t payload_len = 0;
 	struct send_block_record *to_data;
 
-	ASSERT0(rawok && compressok);
-
 	err = dmu_objset_from_ds(to_ds, &os);
 	if (err != 0) {
 		dsl_pool_rele(dp, tag);
@@ -998,20 +997,23 @@ dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *to_ds,
 		featureflags |= DMU_BACKUP_FEATURE_LARGE_BLOCKS;
 	if (to_ds->ds_feature_inuse[SPA_FEATURE_LARGE_DNODE])
 		featureflags |= DMU_BACKUP_FEATURE_LARGE_DNODE;
-	if (embedok &&
+
+	/* encrypted datasets will not have embedded blocks */
+	if ((embedok || rawok) && !os->os_encrypted &&
 	    spa_feature_is_active(dp->dp_spa, SPA_FEATURE_EMBEDDED_DATA)) {
 		featureflags |= DMU_BACKUP_FEATURE_EMBED_DATA;
 	}
 
-	if (compressok || (rawok && !os->os_encrypted)) {
+	/* raw send implies compressok */
+	if (compressok || rawok)
 		featureflags |= DMU_BACKUP_FEATURE_COMPRESSED;
-	} else if (rawok && os->os_encrypted) {
+	if (rawok && os->os_encrypted)
 		featureflags |= DMU_BACKUP_FEATURE_RAW;
-	}
 
 	if ((featureflags &
-	    (DMU_BACKUP_FEATURE_EMBED_DATA | DMU_BACKUP_FEATURE_COMPRESSED)) !=
-	    0 && spa_feature_is_active(dp->dp_spa, SPA_FEATURE_LZ4_COMPRESS)) {
+	    (DMU_BACKUP_FEATURE_EMBED_DATA | DMU_BACKUP_FEATURE_COMPRESSED |
+	    DMU_BACKUP_FEATURE_RAW)) != 0 &&
+	    spa_feature_is_active(dp->dp_spa, SPA_FEATURE_LZ4_COMPRESS)) {
 		featureflags |= DMU_BACKUP_FEATURE_LZ4;
 	}
 
@@ -1599,11 +1601,6 @@ dmu_recv_begin_check(void *arg, dmu_tx_t *tx)
 	    ((flags & DRR_FLAG_CLONE) && drba->drba_origin == NULL))
 		return (SET_ERROR(EINVAL));
 
-	/* Raw streams are mutually exclusive with compressed streams */
-	if ((featureflags & DMU_BACKUP_FEATURE_COMPRESSED) &&
-	    (featureflags & DMU_BACKUP_FEATURE_RAW))
-		return (SET_ERROR(EINVAL));
-
 	/* Verify pool version supports SA if SA_SPILL feature set */
 	if ((featureflags & DMU_BACKUP_FEATURE_SA_SPILL) &&
 	    spa_version(dp->dp_spa) < SPA_VERSION_SA)
@@ -1810,7 +1807,6 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 	}
 	VERIFY0(dsl_dataset_own_obj(dp, dsobj, dsflags, dmu_recv_tag, &newds));
 	VERIFY0(dmu_objset_from_ds(newds, &os));
-	os->os_receiving = B_TRUE;
 
 	if (drba->drba_cookie->drc_resumable) {
 		uint64_t one = 1;
@@ -1904,11 +1900,6 @@ dmu_recv_resume_begin_check(void *arg, dmu_tx_t *tx)
 	if (DMU_GET_STREAM_HDRTYPE(drrb->drr_versioninfo) ==
 	    DMU_COMPOUNDSTREAM ||
 	    drrb->drr_type >= DMU_OST_NUMTYPES)
-		return (SET_ERROR(EINVAL));
-
-	/* Raw streams are mutually exclusive with compressed streams */
-	if ((featureflags & DMU_BACKUP_FEATURE_COMPRESSED) &&
-	    (featureflags & DMU_BACKUP_FEATURE_RAW))
 		return (SET_ERROR(EINVAL));
 
 	/* Verify pool version supports SA if SA_SPILL feature set */
@@ -2033,7 +2024,6 @@ dmu_recv_resume_begin_sync(void *arg, dmu_tx_t *tx)
 
 	VERIFY0(dsl_dataset_own_obj(dp, dsobj, dsflags, dmu_recv_tag, &ds));
 	VERIFY0(dmu_objset_from_ds(ds, &os));
-	os->os_receiving = B_TRUE;
 
 	dmu_buf_will_dirty(ds->ds_dbuf, tx);
 	dsl_dataset_phys(ds)->ds_flags |= DS_FLAG_INCONSISTENT;
@@ -2308,6 +2298,7 @@ byteswap_record(dmu_replay_record_t *drr)
 		DO64(drr_spill.drr_object);
 		DO64(drr_spill.drr_length);
 		DO64(drr_spill.drr_toguid);
+		DO64(drr_spill.drr_compressed_size);
 		DO32(drr_spill.drr_type);
 		break;
 	case DRR_OBJECT_RANGE:
@@ -2837,7 +2828,7 @@ receive_object_range(struct receive_writer_arg *rwa,
 	 * match on the sending and receiving side.
 	 */
 	if (drror->drr_numslots != DNODES_PER_BLOCK ||
-	    drror->drr_numslots - drror->drr_firstobj != DNODES_PER_BLOCK ||
+	    P2PHASE(drror->drr_firstobj, DNODES_PER_BLOCK) != 0 ||
 	    (drror->drr_flags & DRR_RAW_ENCRYPTED) == 0)
 		return (SET_ERROR(EINVAL));
 
@@ -2870,12 +2861,15 @@ receive_object_range(struct receive_writer_arg *rwa,
 static void
 dmu_recv_cleanup_ds(dmu_recv_cookie_t *drc)
 {
-	ds_hold_flags_t dsflags = DS_HOLD_FLAG_DECRYPT;
+	ds_hold_flags_t dsflags = (drc->drc_raw) ? 0 : DS_HOLD_FLAG_DECRYPT;
 
-	drc->drc_ds->ds_objset->os_receiving = B_FALSE;
+	/*
+	 * Wait for our resume state to be written to disk or for us
+	 * to finish user accounting before we say we are finished
+	 * receiving the dataset.
+	 */
+	txg_wait_synced(drc->drc_ds->ds_dir->dd_pool, 0);
 	if (drc->drc_resumable) {
-		/* wait for our resume state to be written to disk */
-		txg_wait_synced(drc->drc_ds->ds_dir->dd_pool, 0);
 		dsl_dataset_disown(drc->drc_ds, dsflags, dmu_recv_tag);
 	} else {
 		char name[ZFS_MAX_DATASET_NAME_LEN];
@@ -3665,7 +3659,6 @@ dmu_recv_end_sync(void *arg, dmu_tx_t *tx)
 
 	spa_history_log_internal_ds(drc->drc_ds, "finish receiving",
 	    tx, "snap=%s", drc->drc_tosnap);
-	drc->drc_ds->ds_objset->os_receiving = B_FALSE;
 
 	if (!drc->drc_newfs) {
 		dsl_dataset_t *origin_head;

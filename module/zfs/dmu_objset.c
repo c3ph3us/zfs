@@ -56,6 +56,7 @@
 #include <sys/vdev.h>
 #include <sys/policy.h>
 #include <sys/spa_impl.h>
+#include <sys/dmu_send.h>
 
 /*
  * Needed to close a window in dnode_move() that allows the objset to be freed
@@ -705,9 +706,6 @@ dmu_objset_own(const char *name, dmu_objset_type_t type,
 
 	dsl_pool_rele(dp, FTAG);
 
-	/* we were able to own the dataset, so we shouldnt be receiving */
-	ASSERT0((*osp)->os_receiving);
-
 	if (dmu_objset_userobjspace_upgradable(*osp))
 		dmu_objset_userobjspace_upgrade(*osp);
 
@@ -993,7 +991,7 @@ dmu_objset_create_impl_dnstats(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	 * encrypted receive.
 	 */
 	if (dmu_objset_userused_enabled(os) &&
-	    (!os->os_encrypted || !os->os_receiving)) {
+	    (!os->os_encrypted || !dmu_objset_is_receiving(os))) {
 		os->os_phys->os_flags |= OBJSET_FLAG_USERACCOUNTING_COMPLETE;
 		if (dmu_objset_userobjused_enabled(os)) {
 			ds->ds_feature_activation_needed[
@@ -1522,7 +1520,7 @@ dmu_objset_sync(objset_t *os, zio_t *pio, dmu_tx_t *tx)
 	txgoff = tx->tx_txg & TXG_MASK;
 
 	if (dmu_objset_userused_enabled(os) &&
-	    (!os->os_encrypted || !os->os_receiving)) {
+	    (!os->os_encrypted || !dmu_objset_is_receiving(os))) {
 		/*
 		 * We must create the list here because it uses the
 		 * dn_dirty_link[] of this txg.  But it may already
@@ -1803,7 +1801,7 @@ dmu_objset_do_userquota_updates(objset_t *os, dmu_tx_t *tx)
 		return;
 
 	/* if this is a raw receive just return and handle accounting later */
-	if (os->os_encrypted && os->os_receiving)
+	if (os->os_encrypted && dmu_objset_is_receiving(os))
 		return;
 
 	/* Allocate the user/groupused objects if necessary. */
@@ -1894,7 +1892,7 @@ dmu_objset_userquota_get_ids(dnode_t *dn, boolean_t before, dmu_tx_t *tx)
 	 * so that an incremental raw receive may be done on top of an
 	 * existing non-raw receive.
 	 */
-	if (os->os_encrypted && os->os_receiving)
+	if (os->os_encrypted && dmu_objset_is_receiving(os))
 		return;
 
 	if (before && (flags & (DN_ID_CHKED_BONUS|DN_ID_OLD_EXIST|

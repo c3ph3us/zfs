@@ -4742,9 +4742,6 @@ zfs_ioc_send(zfs_cmd_t *zc)
 	boolean_t compressok = (zc->zc_flags & 0x4);
 	boolean_t rawok = (zc->zc_flags & 0x8);
 
-	if (rawok && compressok)
-		return (SET_ERROR(EINVAL));
-
 	if (zc->zc_obj != 0) {
 		dsl_pool_t *dp;
 		dsl_dataset_t *tosnap;
@@ -5749,7 +5746,7 @@ zfs_ioc_space_snaps(const char *lastsnap, nvlist_t *innvl, nvlist_t *outnvl)
  *     (optional) "compressok" -> (value ignored)
  *         presence indicates compressed DRR_WRITE records are permitted
  *     (optional) "rawok" -> (value ignored)
- *         presence indicates raw DRR_WRITE records should be used.
+ *         presence indicates raw encrypted records should be used.
  *     (optional) "resume_object" and "resume_offset" -> (uint64)
  *         if present, resume send stream from specified object and offset.
  * }
@@ -5782,9 +5779,6 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	embedok = nvlist_exists(innvl, "embedok");
 	compressok = nvlist_exists(innvl, "compressok");
 	rawok = nvlist_exists(innvl, "rawok");
-
-	if (rawok && compressok)
-		return (SET_ERROR(EINVAL));
 
 	(void) nvlist_lookup_uint64(innvl, "resume_object", &resumeobj);
 	(void) nvlist_lookup_uint64(innvl, "resume_offset", &resumeoff);

@@ -31,6 +31,7 @@
 #include <sys/dmu.h>
 #include <sys/dmu_tx.h>
 #include <sys/dmu_objset.h>
+#include <sys/dmu_send.h>
 #include <sys/dsl_dataset.h>
 #include <sys/spa.h>
 #include <sys/range_tree.h>
@@ -573,10 +574,13 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 
 	ASSERT(dn->dn_dbuf == NULL || arc_released(dn->dn_dbuf->db_buf));
 
-	/* do user accounting if it is enabled and this is not a raw recv */
+	/*
+	 * Do user accounting if it is enabled and this is not
+	 * an encrypted receive.
+	 */
 	if (dmu_objset_userused_enabled(os) &&
 	    !DMU_OBJECT_IS_SPECIAL(dn->dn_object) &&
-	    (!os->os_encrypted || !os->os_receiving)) {
+	    (!os->os_encrypted || !dmu_objset_is_receiving(os))) {
 		mutex_enter(&dn->dn_mtx);
 		dn->dn_oldused = DN_USED_BYTES(dn->dn_phys);
 		dn->dn_oldflags = dn->dn_phys->dn_flags;

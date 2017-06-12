@@ -175,12 +175,12 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBsend\fR [\fB-DnPpRveLcr\fR] [\fB-\fR[\fBi\fR|\fBI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+\fBzfs\fR \fBsend\fR [\fB-DnPpRveLcw\fR] [\fB-\fR[\fBi\fR|\fBI\fR] \fIsnapshot\fR] \fIsnapshot\fR
 .fi
 
 .LP
 .nf
-\fBzfs\fR \fBsend\fR [\fB-Lecr\fR] [\fB-i \fIsnapshot\fR|\fIbookmark\fR]\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
+\fBzfs\fR \fBsend\fR [\fB-Lecw\fR] [\fB-i \fIsnapshot\fR|\fIbookmark\fR]\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
 .fi
 
 .LP
@@ -2938,7 +2938,7 @@ See \fBzpool-features\fR(5) for details on ZFS feature flags and the
 .sp
 .ne 2
 .na
-\fBzfs send\fR [\fB-DnPpRveLcr\fR] [\fB-\fR[\fBi\fR|\fBI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+\fBzfs send\fR [\fB-DnPpRveLcw\fR] [\fB-\fR[\fBi\fR|\fBI\fR] \fIsnapshot\fR] \fIsnapshot\fR
 .ad
 .sp .6
 .RS 4n
@@ -3038,7 +3038,7 @@ decompressed before sending so it can be split into smaller block sizes.
 .sp
 .ne 2
 .na
-\fB\fB-r\fR\fR, \fB--raw\fR\fR
+\fB\fB-w\fR\fR, \fB--raw\fR\fR
 .ad
 .sp .6
 .RS 4n
@@ -3049,10 +3049,10 @@ not have the encryption keys to read the protected data or alter it without
 being detected. Upon being received, the dataset will have the same encryption
 keys as it did on the send side, although the \fBkeylocation\fR property will
 be defaulted to \fBprompt\fR if not otherwise provided. For unencrypted
-datasets, this flag will be equivalent to \fB-c\fR. Note that if you do not use
-this flag for sending encrypted datasets, data will be sent unencrypted and may
-be re-encrypted with a different encryption key on the receiving system, which
-will disable the ability to do a raw send to that system for incrementals.
+datasets, this flag will be equivalent to \fB-Lec\fR. Note that if you do not
+use this flag for sending encrypted datasets, data will be sent unencrypted and
+may be re-encrypted with a different encryption key on the receiving system,
+which will disable the ability to do a raw send to that system for incrementals.
 .RE
 
 .sp
@@ -3168,7 +3168,7 @@ decompressed before sending so it can be split into smaller block sizes.
 .sp
 .ne 2
 .na
-\fB\fB-r\fR\fR, \fB--raw\fR\fR
+\fB\fB-w\fR\fR, \fB--raw\fR\fR
 .ad
 .sp .6
 .RS 4n
@@ -3179,10 +3179,10 @@ not have the encryption keys to read the protected data or alter it without
 being detected. Upon being received, the dataset will have the same encryption
 keys as it did on the send side, although the \fBkeylocation\fR property will
 be defaulted to \fBprompt\fR if not otherwise provided. For unencrypted
-datasets, this flag will be equivalent to \fB-c\fR. Note that if you do not use
-this flag for sending encrypted datasets, data will be sent unencrypted and may
-be re-encrypted with a different encryption key on the receiving system, which
-will disable the ability to do a raw send to that system for incrementals.
+datasets, this flag will be equivalent to \fB-Lec\fR. Note that if you do not
+use this flag for sending encrypted datasets, data will be sent unencrypted and
+may be re-encrypted with a different encryption key on the receiving system,
+which will disable the ability to do a raw send to that system for incrementals.
 .RE
 
 .sp

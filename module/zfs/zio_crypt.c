@@ -182,9 +182,8 @@
  * function.
  */
 #define	ZFS_KEY_MAX_SALT_USES_DEFAULT	400000000
-#define	ZFS_KEY_MAX_SALT_USES_MAX	800000000
 #define	ZFS_CURRENT_MAX_SALT_USES	\
-	(MIN(zfs_key_max_salt_uses, ZFS_KEY_MAX_SALT_USES_MAX))
+	(MIN(zfs_key_max_salt_uses, ZFS_KEY_MAX_SALT_USES_DEFAULT))
 unsigned long zfs_key_max_salt_uses = ZFS_KEY_MAX_SALT_USES_DEFAULT;
 
 zio_crypt_info_t zio_crypt_table[ZIO_CRYPT_FUNCTIONS] = {
@@ -1020,7 +1019,6 @@ zio_crypt_bp_zero_nonportable_blkprop(blkptr_t *bp)
 	BP_SET_PSIZE(bp, SPA_MINBLOCKSIZE);
 }
 
-
 static int
 zio_crypt_bp_do_hmac_updates(crypto_context_t ctx, boolean_t should_bswap,
     blkptr_t *bp)
@@ -1129,7 +1127,6 @@ zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, boolean_t should_bswap,
 {
 	int ret, i;
 	dnode_phys_t *adnp;
-	blkptr_t *bp;
 	boolean_t le_bswap = (should_bswap == ZFS_HOST_BYTEORDER);
 	crypto_data_t cd;
 	uint8_t tmp_dncore[offsetof(dnode_phys_t, dn_blkptr)];
@@ -1159,16 +1156,16 @@ zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, boolean_t should_bswap,
 		goto error;
 	}
 
-	for (i = 0; i < dnp->dn_nblkptr + 1; i++) {
-		if (i < dnp->dn_nblkptr) {
-			bp = &dnp->dn_blkptr[i];
-		} else if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
-			bp = DN_SPILL_BLKPTR(dnp);
-		} else {
-			break;
-		}
+	for (i = 0; i < dnp->dn_nblkptr; i++) {
+		ret = zio_crypt_bp_do_hmac_updates(ctx,
+		    should_bswap, &dnp->dn_blkptr[i]);
+		if (ret != 0)
+			goto error;
+	}
 
-		ret = zio_crypt_bp_do_hmac_updates(ctx, should_bswap, bp);
+	if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
+		ret = zio_crypt_bp_do_hmac_updates(ctx,
+		    should_bswap, DN_SPILL_BLKPTR(dnp));
 		if (ret != 0)
 			goto error;
 	}
@@ -1407,9 +1404,9 @@ zio_crypt_do_indirect_mac_checksum_abd(boolean_t generate, abd_t *abd,
 
 /*
  * Special case handling routine for encrypting / decrypting ZIL blocks.
- * We do not check for the older ZIL chain because this feature was not
- * available before the newer ZIL chain was introduced. The goal here
- * is to encrypt everything except the blkptr_t of a lr_write_t and
+ * We do not check for the older ZIL chain because the encryption feature
+ * was not available before the newer ZIL chain was introduced. The goal
+ * here is to encrypt everything except the blkptr_t of a lr_write_t and
  * the zil_chain_t header. Everything that is not encrypted is authenticated.
  */
 static int
@@ -1428,7 +1425,7 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 	lr_t *lr;
 	uint8_t *aadbuf = zio_buf_alloc(datalen);
 
-	/* if we are decrypting, the plainbuffer needs an extra iovec */
+	/* cipherbuf always needs an extra iovec for the MAC */
 	if (encrypt) {
 		src = plainbuf;
 		dst = cipherbuf;
@@ -1610,7 +1607,6 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
     boolean_t *no_crypt)
 {
 	int ret;
-	blkptr_t *bp;
 	uint_t nr_src, nr_dst, crypt_len;
 	uint_t aad_len = 0, nr_iovecs = 0, total_len = 0;
 	uint_t i, j, max_dnp = datalen >> DNODE_SHIFT;
@@ -1708,17 +1704,14 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 		aadp += crypt_len;
 		aad_len += crypt_len;
 
-		for (j = 0; j < dnp->dn_nblkptr + 1; j++) {
-			if (j < dnp->dn_nblkptr) {
-				bp = &dnp->dn_blkptr[j];
-			} else if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
-				bp = DN_SPILL_BLKPTR(dnp);
-			} else {
-				break;
-			}
-
+		for (j = 0; j < dnp->dn_nblkptr; j++) {
 			zio_crypt_bp_do_aad_updates(&aadp, &aad_len,
-			    byteswap, bp);
+			    byteswap, &dnp->dn_blkptr[j]);
+		}
+
+		if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
+			zio_crypt_bp_do_aad_updates(&aadp, &aad_len,
+			    byteswap, DN_SPILL_BLKPTR(dnp));
 		}
 
 		/*

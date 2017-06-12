@@ -64,8 +64,8 @@ typeset checksum=$(md5sum /$TESTPOOL/$TESTFS1/$TESTFILE0 | awk '{ print $1 }')
 
 log_must zfs snapshot $snap2
 
-log_must eval "zfs send -r $snap1 | zfs receive $TESTPOOL/$TESTFS2"
-log_must eval "zfs send -r -i $snap1 $snap2 | zfs receive $TESTPOOL/$TESTFS2"
+log_must eval "zfs send -w $snap1 | zfs receive $TESTPOOL/$TESTFS2"
+log_must eval "zfs send -w -i $snap1 $snap2 | zfs receive $TESTPOOL/$TESTFS2"
 log_must eval "echo $passphrase | zfs mount -l $TESTPOOL/$TESTFS2"
 
 typeset cksum1=$(md5sum /$TESTPOOL/$TESTFS2/$TESTFILE0 | awk '{ print $1 }')

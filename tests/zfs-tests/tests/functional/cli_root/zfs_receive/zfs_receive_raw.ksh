@@ -66,7 +66,7 @@ typeset checksum=$(md5sum /$TESTPOOL/$TESTFS1/$TESTFILE0 | \
 log_must zfs snapshot $snap
 
 log_note "Verify ZFS can receive a raw send stream from an encrypted dataset"
-log_must eval "zfs send -r $snap | zfs receive $TESTPOOL/$TESTFS2"
+log_must eval "zfs send -w $snap | zfs receive $TESTPOOL/$TESTFS2"
 
 keystatus=$(get_prop keystatus $TESTPOOL/$TESTFS2)
 [[ "$keystatus" == "unavailable" ]] || \
@@ -78,7 +78,7 @@ typeset cksum1=$(md5sum /$TESTPOOL/$TESTFS2/$TESTFILE0 | awk '{ print $1 }')
 [[ "$cksum1" == "$checksum" ]] || \
 	log_fail "Checksums differ ($cksum1 != $checksum)"
 
-log_must eval "zfs send -r $snap | zfs receive $TESTPOOL/$TESTFS1/c1"
+log_must eval "zfs send -w $snap | zfs receive $TESTPOOL/$TESTFS1/c1"
 
 keystatus=$(get_prop keystatus $TESTPOOL/$TESTFS1/c1)
 [[ "$keystatus" == "unavailable" ]] || \

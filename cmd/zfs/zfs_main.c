@@ -3849,12 +3849,12 @@ zfs_do_send(int argc, char **argv)
 		{"embed",	no_argument,		NULL, 'e'},
 		{"resume",	required_argument,	NULL, 't'},
 		{"compressed",	no_argument,		NULL, 'c'},
-		{"raw",		no_argument,		NULL, 'r'},
+		{"raw",		no_argument,		NULL, 'w'},
 		{0, 0, 0, 0}
 	};
 
 	/* check options */
-	while ((c = getopt_long(argc, argv, ":i:I:RDpvnPLet:cr", long_options,
+	while ((c = getopt_long(argc, argv, ":i:I:RDpvnPLet:cw", long_options,
 	    NULL)) != -1) {
 		switch (c) {
 		case 'i':
@@ -3902,8 +3902,11 @@ zfs_do_send(int argc, char **argv)
 		case 'c':
 			flags.compress = B_TRUE;
 			break;
-		case 'r':
+		case 'w':
 			flags.raw = B_TRUE;
+			flags.compress = B_TRUE;
+			flags.embed_data = B_TRUE;
+			flags.largeblock = B_TRUE;
 			break;
 		case ':':
 			/*
@@ -3971,12 +3974,6 @@ zfs_do_send(int argc, char **argv)
 			(void) fprintf(stderr, gettext("too many arguments\n"));
 			usage(B_FALSE);
 		}
-	}
-
-	if (flags.raw && flags.compress) {
-		(void) fprintf(stderr,
-		    gettext("raw and compress flags are mutually exclusive\n"));
-		return (1);
 	}
 
 	if (!flags.dryrun && isatty(STDOUT_FILENO)) {

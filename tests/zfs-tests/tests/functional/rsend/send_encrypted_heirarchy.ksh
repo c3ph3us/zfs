@@ -56,7 +56,7 @@ log_must zfs create $POOL/$FS/child
 
 # Back up the tree and verify the structure
 log_must zfs snapshot -r $POOL@before
-log_must eval "zfs send -Rr $POOL@before > $BACKDIR/fs-before-R"
+log_must eval "zfs send -wR $POOL@before > $BACKDIR/fs-before-R"
 log_must eval "zfs receive -d -F $POOL2 < $BACKDIR/fs-before-R"
 dstds=$(get_dst_ds $POOL/$FS $POOL2)
 log_must cmp_ds_subs $POOL/$FS $dstds
@@ -77,7 +77,7 @@ log_must eval "echo $PASSPHRASE1 | zfs change-key -o keyformat=passphrase" \
 	"$POOL/$FS/child"
 log_must zfs promote $POOL/clone
 log_must zfs snapshot -r $POOL@after
-log_must eval "zfs send -Rr -i $POOL@before $POOL@after >" \
+log_must eval "zfs send -wR -i $POOL@before $POOL@after >" \
 	"$BACKDIR/fs-after-R"
 log_must eval "zfs receive -d -F $POOL2 < $BACKDIR/fs-after-R"
 log_must cmp_ds_subs $POOL/$FS $dstds

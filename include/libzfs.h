@@ -664,7 +664,7 @@ typedef struct sendflags {
 	/* compressed WRITE records are permitted */
 	boolean_t compress;
 
-	/* raw WRITE records are permitted, mutually exclusive with compress */
+	/* raw encrypted records are permitted */
 	boolean_t raw;
 } sendflags_t;
 
