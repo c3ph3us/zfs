@@ -1626,9 +1626,8 @@ dsl_dataset_promote_crypt_sync(dsl_dir_t *target, dsl_dir_t *origin,
 	VERIFY0(dsl_dataset_hold_obj(dp,
 	    dsl_dir_phys(origin)->dd_head_dataset_obj, FTAG, &originds));
 
-	VERIFY0(dsl_prop_get_dd(origin,
-	    zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
-	    1, sizeof (keylocation), keylocation, NULL, B_FALSE));
+	VERIFY0(dsl_prop_get_dd(origin, zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
+	    1, ZAP_MAXVALUELEN, keylocation, NULL, B_FALSE));
 	dsl_prop_set_sync_impl(targetds, zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
 	    ZPROP_SRC_LOCAL, 1, strlen(keylocation) + 1, keylocation, tx);
 	dsl_prop_set_sync_impl(originds, zfs_prop_to_name(ZFS_PROP_KEYLOCATION),

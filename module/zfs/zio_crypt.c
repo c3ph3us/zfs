@@ -392,6 +392,7 @@ zio_crypt_key_init(uint64_t crypt, zio_crypt_key_t *key)
 	ASSERT3U(crypt, <, ZIO_CRYPT_FUNCTIONS);
 
 	keydata_len = zio_crypt_table[crypt].ci_keylen;
+	bzero(key, sizeof (zio_crypt_key_t));
 
 	/* fill keydata buffers and salt with random data */
 	ret = random_get_bytes((uint8_t *)&key->zk_guid, sizeof (uint64_t));
@@ -1719,7 +1720,10 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint8_t *plainbuf,
 		 * iovec_t. The encryption / decryption functions will fill
 		 * this in for us with the encrypted or decrypted data.
 		 * Otherwise we add the bonus buffer to the authenticated
-		 * data buffer and copy it over to the destination.
+		 * data buffer and copy it over to the destination. The
+		 * encrypted iovec extends to DN_MAX_BONUS_LEN(dnp) so that
+		 * we can guarantee alignment with the AES block size
+		 * (128 bits).
 		 */
 		crypt_len = DN_MAX_BONUS_LEN(dnp);
 		if (dnp->dn_type != DMU_OT_NONE &&

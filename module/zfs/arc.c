@@ -2029,13 +2029,12 @@ error:
  * block, so we use the hash lock here to protect against concurrent calls to
  * arc_buf_fill().
  */
-static int
+static void
 arc_buf_untransform_in_place(arc_buf_t *buf, kmutex_t *hash_lock)
 {
 	arc_buf_hdr_t *hdr = buf->b_hdr;
 
-	if (hdr->b_l1hdr.b_pabd == NULL)
-		return (SET_ERROR(EIO));
+	ASSERT3P(hdr->b_l1hdr.b_pabd, !=, NULL);
 
 	if (hash_lock != NULL)
 		mutex_enter(hash_lock);
@@ -2058,8 +2057,6 @@ arc_buf_untransform_in_place(arc_buf_t *buf, kmutex_t *hash_lock)
 out_unlock:
 	if (hash_lock != NULL)
 		mutex_exit(hash_lock);
-
-	return (0);
 }
 
 /*
@@ -2146,9 +2143,7 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, uint64_t dsobj, arc_fill_flags_t flags)
 
 		if (HDR_ENCRYPTED(hdr) && ARC_BUF_ENCRYPTED(buf)) {
 			ASSERT3U(hdr->b_crypt_hdr.b_ot, ==, DMU_OT_DNODE);
-			error = arc_buf_untransform_in_place(buf, hash_lock);
-			if (error != 0)
-				return (error);
+			arc_buf_untransform_in_place(buf, hash_lock);
 		}
 
 		/* Compute the hdr's checksum if necessary */
@@ -3594,7 +3589,7 @@ arc_alloc_compressed_buf(spa_t *spa, void *tag, uint64_t psize, uint64_t lsize,
 	if (!arc_buf_is_shared(buf)) {
 		/*
 		 * To ensure that the hdr has the correct data in it if we call
-		 * arc_decompress() on this buf before it's been written to
+		 * arc_untransform() on this buf before it's been written to
 		 * disk, it's easiest if we just set up sharing between the
 		 * buf and the hdr.
 		 */

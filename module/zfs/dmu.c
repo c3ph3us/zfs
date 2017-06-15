@@ -1494,7 +1494,7 @@ dmu_assign_arcbuf_impl(dmu_buf_t *handle, arc_buf_t *buf, dmu_tx_t *tx)
 
 void
 dmu_convert_to_raw(dmu_buf_t *handle, boolean_t byteorder, const uint8_t *salt,
-    const uint8_t *iv, const uint8_t *mac)
+    const uint8_t *iv, const uint8_t *mac, dmu_tx_t *tx)
 {
 	dmu_object_type_t type;
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)handle;
@@ -1502,6 +1502,8 @@ dmu_convert_to_raw(dmu_buf_t *handle, boolean_t byteorder, const uint8_t *salt,
 
 	ASSERT3P(db->db_buf, !=, NULL);
 	ASSERT3U(dsobj, !=, 0);
+
+	dmu_buf_will_change_crypt_params(handle, tx);
 
 	DB_DNODE_ENTER(db);
 	type = DB_DNODE(db)->dn_type;

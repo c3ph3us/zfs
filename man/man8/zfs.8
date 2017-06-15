@@ -542,7 +542,7 @@ been set somewhere in the tree under which the dataset resides.
 .sp .6
 .RS 4n
 Indicates if an encryption key is currently loaded into ZFS. The possible
-values are \fBnone\fR, \fBavailable\fR, and \fBunavaliable\fR. See
+values are \fBnone\fR, \fBavailable\fR, and \fBunavailable\fR. See
 \fBzfs load-key\fR and \fBzfs unload-key\fR.
 .RE
 
@@ -1088,11 +1088,21 @@ Controls what format the user's encryption key will be provided as. This
 property is only set when the dataset is encrypted.
 .sp
 Raw keys and hex keys must be 32 bytes long (regardless of the chosen
-encryption suite) and must be randomly generated. Passphrases must be between
-8 and 64 bytes long and will be processed through PBKDF2 before being used
-(see the \fBpbkdf2iters\fR property). Even though the encryption suite cannot
-be changed after dataset creation, the keyformat can be with
-\fBzfs change-key\fR.
+encryption suite) and must be randomly generated. A raw key can be generated
+with the following command:
+
+.sp
+.in +2
+.nf
+# \fBdd if=/dev/urandom of=/path/to/output/key bs=32 count=1\fR
+.fi
+.in -2
+.sp
+
+Passphrases must be between 8 and 64 bytes long and will be processed through
+PBKDF2 before being used (see the \fBpbkdf2iters\fR property). Even though the
+encryption suite cannot be changed after dataset creation, the keyformat can be
+with \fBzfs change-key\fR.
 .RE
 
 .sp
@@ -1105,7 +1115,8 @@ be changed after dataset creation, the keyformat can be with
 .RS 4n
 Controls where the user's encryption key will be loaded from by default for
 commands such as \fBzfs load-key\fR and \fBzfs mount -l\fR. This property is
-only set for encrypted datasets which are encryption roots.
+only set for encrypted datasets which are encryption roots. If unspecified, the
+default is \fBprompt\fR.
 .sp
 Even though the encryption suite cannot be changed after dataset creation, the
 keylocation can be with either \fBzfs set\fR or \fBzfs change-key\fR. If
@@ -1786,11 +1797,11 @@ with the \fBzfs create\fR command set up and enable the swap area using the
 \fBZFS\fR file system. A \fBZFS\fR swap file configuration is not supported.
 .SS "Encryption"
 .LP
-Enabling the \fBencryption\fR feature allows the user to create natively
-encrypted filesystems and volumes. \fBZFS\fR will encrypt all user data
-including file and zvol data, file attributes, ACLs, permission bits, directory
-listings, FUID mappings, and userused / groupused data. \fBZFS\fR will not
-encrypt metadata related to the pool structure, including dataset names, dataset
+Enabling the \fBencryption\fR feature allows for the creation of encrypted
+filesystems and volumes. \fBZFS\fR will encrypt all user data including file
+and zvol data, file attributes, ACLs, permission bits, directory listings,
+FUID mappings, and userused / groupused data. \fBZFS\fR will not encrypt
+metadata related to the pool structure, including dataset names, dataset
 hierarchy, file size, file holes, and dedup tables. Key rotation is managed
 internally by the \fBZFS\fR kernel module and changing the user's key does not
 require re-encrypting the entire dataset. Datasets can be scrubbed, resilvered,
@@ -1805,7 +1816,7 @@ created dataset will become an encryption root. Any descendant datasets will
 inherit their encryption key from the encryption root, meaning that loading,
 unloading, or changing the key for the encryption root will implicitly do the
 same for all inheriting datasets. If this inheritence is not desired, simply
-supply a new \fBencryption\fR and \fbkeyformat\fR when creating the child
+supply a new \fBencryption\fR and \fBkeyformat\fR when creating the child
 dataset or use \fBzfs change-key\fR to break the relationship. The one exception
 is that clones will always use their origin's encryption key. Encryption root
 inheritence can be tracked via the read-only \fBencryptionroot\fR property.
@@ -3042,7 +3053,7 @@ decompressed before sending so it can be split into smaller block sizes.
 .ad
 .sp .6
 .RS 4n
-For encrypted datasets send data exactly as it exists on disk. This allows
+For encrypted datasets, send data exactly as it exists on disk. This allows
 backups to be taken even if encryption keys are not currently loaded. The
 backup may then be received on an untrusted machine since that machine will
 not have the encryption keys to read the protected data or alter it without
@@ -3172,7 +3183,7 @@ decompressed before sending so it can be split into smaller block sizes.
 .ad
 .sp .6
 .RS 4n
-For encrypted datasets send data exactly as it exists on disk. This allows
+For encrypted datasets, send data exactly as it exists on disk. This allows
 backups to be taken even if encryption keys are not currently loaded. The
 backup may then be received on an untrusted machine since that machine will
 not have the encryption keys to read the protected data or alter it without

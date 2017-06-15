@@ -147,6 +147,7 @@ typedef struct dbuf_dirty_record {
 			override_states_t dr_override_state;
 			uint8_t dr_copies;
 			boolean_t dr_nopwrite;
+			boolean_t dr_raw;
 		} dl;
 	} dt;
 } dbuf_dirty_record_t;

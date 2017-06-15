@@ -554,7 +554,11 @@ dump_dnode(dmu_sendarg_t *dsp, const blkptr_t *bp, uint64_t object,
 		drro->drr_nlevels = dnp->dn_nlevels;
 		drro->drr_nblkptr = dnp->dn_nblkptr;
 
-		/* raw bonus buffers extend to the end of the dnp */
+		/*
+		 * Since we encrypt the entire bonus area, the (raw) part
+		 * beyond the the bonuslen is actually nonzero, so we need
+		 * to send it.
+		 */
 		if (bonuslen != 0) {
 			drro->drr_raw_bonuslen = DN_MAX_BONUS_LEN(dnp);
 			bonuslen = drro->drr_raw_bonuslen;
@@ -2479,7 +2483,7 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 	    drro->drr_compress, tx);
 
 	/* handle more restrictive dnode structuring for raw recvs */
-	if (drro->drr_flags & DRR_RAW_ENCRYPTED) {
+	if (DRR_IS_RAW_ENCRYPTED(drro->drr_flags)) {
 		/*
 		 * Set the indirect block shift and nlevels. This will not fail
 		 * because we ensured all of the blocks were free earlier if
@@ -2495,7 +2499,7 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 		dmu_buf_t *db;
 		uint32_t flags = DMU_READ_NO_PREFETCH;
 
-		if ((drro->drr_flags & DRR_RAW_ENCRYPTED) != 0)
+		if (DRR_IS_RAW_ENCRYPTED(drro->drr_flags))
 			flags |= DMU_READ_NO_DECRYPT;
 
 		VERIFY0(dmu_bonus_hold_impl(rwa->os, drro->drr_object,
@@ -2509,7 +2513,7 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 		 * Raw bonus buffers have their byteorder determined by the
 		 * DRR_OBJECT_RANGE record.
 		 */
-		if (rwa->byteswap && !(drro->drr_flags & DRR_RAW_ENCRYPTED)) {
+		if (rwa->byteswap && !DRR_IS_RAW_ENCRYPTED(drro->drr_flags)) {
 			dmu_object_byteswap_t byteswap =
 			    DMU_OT_BYTESWAP(drro->drr_bonustype);
 			dmu_ot_byteswap[byteswap].ob_func(db->db_data,
@@ -2812,9 +2816,16 @@ receive_object_range(struct receive_writer_arg *rwa,
 	dnode_t *mdn = NULL;
 	dmu_buf_t *db = NULL;
 	uint64_t offset;
-	boolean_t byteorder = ZFS_HOST_BYTEORDER ^
-	    !!DRR_IS_RAW_BYTESWAPPED(drror->drr_flags) ^
-	    rwa->byteswap;
+
+	/*
+	 * By default, we assume this block is in our native format
+	 * (ZFS_HOST_BYTEORDER). We then take into account whether
+	 * the send stream is byteswapped (rwa->byteswap). Finally,
+	 * we need to byteswap again if this particular block was
+	 * in non-native format on the send side.
+	 */
+	boolean_t byteorder = ZFS_HOST_BYTEORDER ^ rwa->byteswap ^
+	    !!DRR_IS_RAW_BYTESWAPPED(drror->drr_flags);
 
 	/*
 	 * Since dnode block sizes are constant, we should not need to worry
@@ -2829,7 +2840,7 @@ receive_object_range(struct receive_writer_arg *rwa,
 	 */
 	if (drror->drr_numslots != DNODES_PER_BLOCK ||
 	    P2PHASE(drror->drr_firstobj, DNODES_PER_BLOCK) != 0 ||
-	    (drror->drr_flags & DRR_RAW_ENCRYPTED) == 0)
+	    !DRR_IS_RAW_ENCRYPTED(drror->drr_flags))
 		return (SET_ERROR(EINVAL));
 
 	offset = drror->drr_firstobj * sizeof (dnode_phys_t);
@@ -2849,9 +2860,19 @@ receive_object_range(struct receive_writer_arg *rwa,
 		return (ret);
 	}
 
-	dmu_buf_will_change_crypt_params(db, tx);
+	/*
+	 * Convert the buffer associated with this range of dnodes to a
+	 * raw buffer. This ensures that it will be written out as a raw
+	 * buffer when we fill in the dnode objects in future records.
+	 * Since we are commiting this tx now, it is technically possible
+	 * for the dnode block to end up on-disk with the incorrect MAC.
+	 * Despite this, the dataset is marked as inconsistent so no other
+	 * code paths (apart from scrubs) will attempt to read this data.
+	 * Scrubs will not be effected by this either since scrubs only
+	 * read raw data and do not attempt to check the MAC.
+	 */
 	dmu_convert_to_raw(db, byteorder, drror->drr_salt, drror->drr_iv,
-	    drror->drr_mac);
+	    drror->drr_mac, tx);
 	dmu_buf_rele(db, FTAG);
 	dmu_tx_commit(tx);
 	return (0);
@@ -2864,11 +2885,14 @@ dmu_recv_cleanup_ds(dmu_recv_cookie_t *drc)
 	ds_hold_flags_t dsflags = (drc->drc_raw) ? 0 : DS_HOLD_FLAG_DECRYPT;
 
 	/*
-	 * Wait for our resume state to be written to disk or for us
-	 * to finish user accounting before we say we are finished
-	 * receiving the dataset.
+	 * Wait for the txg sync before cleaning up the receive. For
+	 * resumable receives, this ensures that our resume state has
+	 * been written out to disk. For raw receives, this ensures
+	 * that the user accounting code will not attempt to do anything
+	 * after we stopped receiving the dataset.
 	 */
 	txg_wait_synced(drc->drc_ds->ds_dir->dd_pool, 0);
+
 	if (drc->drc_resumable) {
 		dsl_dataset_disown(drc->drc_ds, dsflags, dmu_recv_tag);
 	} else {

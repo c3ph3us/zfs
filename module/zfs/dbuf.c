@@ -1366,6 +1366,7 @@ dbuf_unoverride(dbuf_dirty_record_t *dr)
 
 	dr->dt.dl.dr_override_state = DR_NOT_OVERRIDDEN;
 	dr->dt.dl.dr_nopwrite = B_FALSE;
+	dr->dt.dl.dr_raw = B_FALSE;
 
 	/*
 	 * Release the already-written buffer, so we leave it in
@@ -2001,17 +2002,6 @@ dmu_buf_will_dirty(dmu_buf_t *db_fake, dmu_tx_t *tx)
 	    DB_RF_MUST_SUCCEED | DB_RF_NOPREFETCH, tx);
 }
 
-/*
- * This function is effectively the same as dmu_buf_will_dirty(), but
- * indicates the caller expects raw encrypted data in the db.
- */
-void
-dmu_buf_will_change_crypt_params(dmu_buf_t *db_fake, dmu_tx_t *tx)
-{
-	dmu_buf_will_dirty_impl(db_fake,
-	    DB_RF_MUST_SUCCEED | DB_RF_NOPREFETCH | DB_RF_NO_DECRYPT, tx);
-}
-
 void
 dmu_buf_will_not_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 {
@@ -2037,6 +2027,29 @@ dmu_buf_will_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 
 	dbuf_noread(db);
 	(void) dbuf_dirty(db, tx);
+}
+
+/*
+ * This function is effectively the same as dmu_buf_will_dirty(), but
+ * indicates the caller expects raw encrypted data in the db. It will
+ * also set the raw flag on the created dirty record.
+ */
+void
+dmu_buf_will_change_crypt_params(dmu_buf_t *db_fake, dmu_tx_t *tx)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
+	dbuf_dirty_record_t *dr;
+
+	dmu_buf_will_dirty_impl(db_fake,
+	    DB_RF_MUST_SUCCEED | DB_RF_NOPREFETCH | DB_RF_NO_DECRYPT, tx);
+
+	dr = db->db_last_dirty;
+	while (dr != NULL && dr->dr_txg > tx->tx_txg)
+		dr = dr->dr_next;
+
+	ASSERT3P(dr, !=, NULL);
+	ASSERT3U(dr->dr_txg, ==, tx->tx_txg);
+	dr->dt.dl.dr_raw = B_TRUE;
 }
 
 #pragma weak dmu_buf_fill_done = dbuf_fill_done
@@ -3185,6 +3198,41 @@ dbuf_check_blkptr(dnode_t *dn, dmu_buf_impl_t *db)
 }
 
 /*
+ * Ensure the dbuf's data is untransformed if the associated dirty
+ * record requires it. This is used by dbuf_sync_leaf() to ensure
+ * that a dnode block is decrypted before we write new data to it.
+ * For raw writes we assert that the buffer is already encrypted.
+ */
+static void
+dbuf_check_crypt(dbuf_dirty_record_t *dr)
+{
+	int err;
+	dmu_buf_impl_t *db = dr->dr_dbuf;
+
+	ASSERT(MUTEX_HELD(&db->db_mtx));
+
+	if (!dr->dt.dl.dr_raw && arc_is_encrypted(db->db_buf)) {
+		/*
+		 * Unfortunately, there is currently no mechanism for
+		 * syncing context to handle decryption errors. An error
+		 * here is only possible if an attacker maliciously
+		 * changed a dnode block and updated the associated
+		 * checksums going up the block tree.
+		 */
+		err = arc_untransform(db->db_buf, db->db_objset->os_spa,
+		    dmu_objset_id(db->db_objset), B_TRUE);
+		if (err)
+			panic("Invalid dnode block MAC");
+	} else if (dr->dt.dl.dr_raw) {
+		/*
+		 * Writing raw encrypted data requires the db's arc buffer
+		 * to be converted to raw by the caller.
+		 */
+		ASSERT(arc_is_encrypted(db->db_buf));
+	}
+}
+
+/*
  * dbuf_sync_indirect() is called recursively from dbuf_sync_list() so it
  * is critical the we not allow the compiler to inline this function in to
  * dbuf_sync_list() thereby drastically bloating the stack usage.
@@ -3354,6 +3402,13 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		cv_wait(&db->db_changed, &db->db_mtx);
 		ASSERT(dr->dt.dl.dr_override_state != DR_NOT_OVERRIDDEN);
 	}
+
+	/*
+	 * If this is a dnode block, ensure it is appropriately encrypted
+	 * or decrypted, depending on what we are writing to it this txg.
+	 */
+	if (os->os_encrypted && dn->dn_object == DMU_META_DNODE_OBJECT)
+		dbuf_check_crypt(dr);
 
 	if (db->db_state != DB_NOFILL &&
 	    dn->dn_object != DMU_META_DNODE_OBJECT &&
