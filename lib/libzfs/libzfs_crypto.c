@@ -57,7 +57,7 @@ typedef enum key_locator {
 } key_locator_t;
 
 #define	MIN_PASSPHRASE_LEN 8
-#define	MAX_PASSPHRASE_LEN 64
+#define	MAX_PASSPHRASE_LEN 512
 #define	MAX_KEY_PROMPT_ATTEMPTS 3
 
 static int caught_interrupt;
@@ -185,6 +185,12 @@ get_key_material_raw(FILE *fd, const char *fsname, zfs_keyformat_t keyformat,
 			errno = 0;
 			goto out;
 		}
+
+		/* trim the ending newline if it exists */
+		if ((*buf)[bytes - 1] == '\n') {
+			(*buf)[bytes - 1] = '\0';
+			bytes--;
+		}
 	} else {
 		/*
 		 * Raw keys may have newline characters in them and so can't
@@ -207,12 +213,6 @@ get_key_material_raw(FILE *fd, const char *fsname, zfs_keyformat_t keyformat,
 			errno = 0;
 			goto out;
 		}
-	}
-
-	/* trim the ending newline if it exists */
-	if ((*buf)[bytes - 1] == '\n') {
-		(*buf)[bytes - 1] = '\0';
-		bytes--;
 	}
 
 	*len_out = bytes;
@@ -346,23 +346,25 @@ get_key_material(libzfs_handle_t *hdl, boolean_t do_verify, boolean_t newkey,
 		}
 		break;
 	case ZFS_KEYFORMAT_PASSPHRASE:
-		/* verify the length is correct */
+		/* verify the length is within bounds */
 		if (kmlen > MAX_PASSPHRASE_LEN) {
 			ret = EINVAL;
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-			    "Passphrase too long (max 64)."));
+			    "Passphrase too long (max %u)."),
+			    MAX_PASSPHRASE_LEN);
 			goto error;
 		}
 
 		if (kmlen < MIN_PASSPHRASE_LEN) {
 			ret = EINVAL;
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-			    "Passphrase too short (min 8)."));
+			    "Passphrase too short (min %u)."),
+			    MIN_PASSPHRASE_LEN);
 			goto error;
 		}
 		break;
 	default:
-		/* can't happen */
+		/* can't happen, checked above */
 		break;
 	}
 

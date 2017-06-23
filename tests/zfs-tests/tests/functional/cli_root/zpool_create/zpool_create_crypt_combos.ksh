@@ -70,7 +70,7 @@ typeset -i i=0
 while (( i < ${#ENCRYPTION_ALGS[*]} )); do
 	typeset -i j=0
 	while (( j < ${#KEYFORMATS[*]} )); do
-		log_must eval "echo ${USER_KEYS[j]} | zpool create" \
+		log_must eval "echo -n ${USER_KEYS[j]} | zpool create" \
 		"-O ${ENCRYPTION_ALGS[i]} -O ${KEYFORMATS[j]}" \
 		"$TESTPOOL $DISKS"
 

@@ -75,7 +75,7 @@ typeset -i i=0
 while (( i < ${#ENCRYPTION_ALGS[*]} )); do
 	typeset -i j=0
 	while (( j < ${#KEYFORMATS[*]} )); do
-		log_must eval "echo ${USER_KEYS[j]} | zfs create" \
+		log_must eval "echo -n ${USER_KEYS[j]} | zfs create" \
 			"-o ${ENCRYPTION_ALGS[i]} -o ${KEYFORMATS[j]}" \
 			"$TESTPOOL/$TESTFS1"
 
